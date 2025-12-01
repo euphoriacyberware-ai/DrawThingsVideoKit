@@ -1,0 +1,375 @@
+//
+//  VideoAssembler.swift
+//  DrawThingsVideoKit
+//
+//  Low-level video assembly from frames using AVFoundation.
+//
+
+import Foundation
+import AVFoundation
+import CoreGraphics
+import CoreImage
+import VideoToolbox
+
+/// Errors that can occur during video assembly.
+public enum VideoAssemblerError: Error, LocalizedError {
+    case noFrames
+    case inconsistentFrameSizes
+    case failedToCreateWriter(Error?)
+    case failedToCreateWriterInput
+    case failedToCreatePixelBufferAdaptor
+    case failedToCreatePixelBuffer
+    case failedToStartWriting
+    case failedToAppendFrame(Int)
+    case failedToFinishWriting(Error?)
+    case interpolationFailed(Error?)
+    case outputFileExists
+    case invalidConfiguration(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .noFrames:
+            return "No frames provided for video assembly"
+        case .inconsistentFrameSizes:
+            return "All frames must have the same dimensions"
+        case .failedToCreateWriter(let error):
+            return "Failed to create video writer: \(error?.localizedDescription ?? "unknown error")"
+        case .failedToCreateWriterInput:
+            return "Failed to create video writer input"
+        case .failedToCreatePixelBufferAdaptor:
+            return "Failed to create pixel buffer adaptor"
+        case .failedToCreatePixelBuffer:
+            return "Failed to create pixel buffer from frame"
+        case .failedToStartWriting:
+            return "Failed to start video writing session"
+        case .failedToAppendFrame(let index):
+            return "Failed to append frame at index \(index)"
+        case .failedToFinishWriting(let error):
+            return "Failed to finish writing video: \(error?.localizedDescription ?? "unknown error")"
+        case .interpolationFailed(let error):
+            return "Frame interpolation failed: \(error?.localizedDescription ?? "unknown error")"
+        case .outputFileExists:
+            return "Output file already exists and overwrite is disabled"
+        case .invalidConfiguration(let message):
+            return "Invalid configuration: \(message)"
+        }
+    }
+}
+
+/// Assembles video frames into a video file using AVFoundation.
+///
+/// VideoAssembler handles the low-level details of creating video files from
+/// sequences of images, including codec selection, quality settings, and
+/// optional frame interpolation using Core Image blending.
+///
+/// Example usage:
+/// ```swift
+/// let assembler = VideoAssembler()
+///
+/// let config = VideoConfiguration(
+///     outputURL: outputURL,
+///     frameRate: 24,
+///     interpolation: .enabled(factor: 2)
+/// )
+///
+/// let outputURL = try await assembler.assemble(
+///     frames: frameCollection,
+///     configuration: config
+/// ) { progress in
+///     print("Progress: \(progress * 100)%")
+/// }
+/// ```
+public actor VideoAssembler {
+    /// Core Image context for frame blending.
+    private let ciContext: CIContext
+
+    /// Creates a new video assembler.
+    public init() {
+        self.ciContext = CIContext(options: [.useSoftwareRenderer: false])
+    }
+
+    /// Assembles frames into a video file.
+    ///
+    /// - Parameters:
+    ///   - frames: The frame collection to assemble.
+    ///   - configuration: Video output configuration.
+    ///   - progress: Optional progress callback (0.0 to 1.0).
+    /// - Returns: The URL of the assembled video.
+    /// - Throws: VideoAssemblerError if assembly fails.
+    public func assemble(
+        frames: VideoFrameCollection,
+        configuration: VideoConfiguration,
+        progress: (@Sendable (Double) -> Void)? = nil
+    ) async throws -> URL {
+        // Validate inputs
+        guard !frames.isEmpty else {
+            throw VideoAssemblerError.noFrames
+        }
+
+        // Handle existing file
+        if FileManager.default.fileExists(atPath: configuration.outputURL.path) {
+            if configuration.overwriteExisting {
+                try FileManager.default.removeItem(at: configuration.outputURL)
+            } else {
+                throw VideoAssemblerError.outputFileExists
+            }
+        }
+
+        // Load all CGImages
+        let cgImages = frames.allCGImages()
+        guard !cgImages.isEmpty else {
+            throw VideoAssemblerError.noFrames
+        }
+
+        // Apply interpolation if enabled
+        let finalFrames: [CGImage]
+        if configuration.interpolation.isEnabled {
+            finalFrames = try interpolateFrames(
+                cgImages,
+                factor: configuration.interpolation.factor,
+                progress: { p in progress?(p * 0.5) } // First 50% for interpolation
+            )
+        } else {
+            finalFrames = cgImages
+        }
+
+        // Assemble video
+        let outputURL = try await writeVideo(
+            frames: finalFrames,
+            configuration: configuration,
+            progress: { p in
+                let base = configuration.interpolation.isEnabled ? 0.5 : 0.0
+                progress?(base + p * (1.0 - base))
+            }
+        )
+
+        return outputURL
+    }
+
+    // MARK: - Frame Interpolation
+
+    /// Interpolates frames using Core Image blending.
+    ///
+    /// This uses a cross-dissolve blend between frames to create smooth transitions.
+    /// For true motion-based interpolation, consider using external ML models.
+    private func interpolateFrames(
+        _ frames: [CGImage],
+        factor: Int,
+        progress: (@Sendable (Double) -> Void)?
+    ) throws -> [CGImage] {
+        guard factor > 1, frames.count >= 2 else {
+            return frames
+        }
+
+        var result: [CGImage] = []
+        let totalPairs = frames.count - 1
+
+        for i in 0..<totalPairs {
+            result.append(frames[i])
+
+            // Generate intermediate frames using blend
+            let intermediateFrames = try generateBlendedFrames(
+                from: frames[i],
+                to: frames[i + 1],
+                count: factor - 1
+            )
+            result.append(contentsOf: intermediateFrames)
+
+            progress?(Double(i + 1) / Double(totalPairs))
+        }
+
+        // Add the last frame
+        result.append(frames[frames.count - 1])
+
+        return result
+    }
+
+    /// Generates intermediate frames between two images using Core Image blending.
+    private func generateBlendedFrames(
+        from startFrame: CGImage,
+        to endFrame: CGImage,
+        count: Int
+    ) throws -> [CGImage] {
+        guard count > 0 else { return [] }
+
+        let startImage = CIImage(cgImage: startFrame)
+        let endImage = CIImage(cgImage: endFrame)
+
+        var intermediateFrames: [CGImage] = []
+        let extent = startImage.extent
+
+        for i in 1...count {
+            let fraction = CGFloat(i) / CGFloat(count + 1)
+
+            // Use CIBlendWithMask or simple dissolve
+            guard let blendFilter = CIFilter(name: "CIDissolveTransition") else {
+                throw VideoAssemblerError.interpolationFailed(nil)
+            }
+
+            blendFilter.setValue(startImage, forKey: kCIInputImageKey)
+            blendFilter.setValue(endImage, forKey: kCIInputTargetImageKey)
+            blendFilter.setValue(fraction, forKey: kCIInputTimeKey)
+
+            guard let outputImage = blendFilter.outputImage,
+                  let cgImage = ciContext.createCGImage(outputImage, from: extent) else {
+                throw VideoAssemblerError.interpolationFailed(nil)
+            }
+
+            intermediateFrames.append(cgImage)
+        }
+
+        return intermediateFrames
+    }
+
+    // MARK: - Video Writing
+
+    /// Writes frames to a video file.
+    private func writeVideo(
+        frames: [CGImage],
+        configuration: VideoConfiguration,
+        progress: (@Sendable (Double) -> Void)?
+    ) async throws -> URL {
+        guard let firstFrame = frames.first else {
+            throw VideoAssemblerError.noFrames
+        }
+
+        let width = firstFrame.width
+        let height = firstFrame.height
+
+        // Verify all frames have the same size
+        for frame in frames {
+            if frame.width != width || frame.height != height {
+                throw VideoAssemblerError.inconsistentFrameSizes
+            }
+        }
+
+        // Create asset writer
+        let writer: AVAssetWriter
+        do {
+            writer = try AVAssetWriter(outputURL: configuration.outputURL, fileType: .mp4)
+        } catch {
+            throw VideoAssemblerError.failedToCreateWriter(error)
+        }
+
+        // Video settings
+        let videoSettings: [String: Any] = [
+            AVVideoCodecKey: configuration.codec.avCodecType,
+            AVVideoWidthKey: width,
+            AVVideoHeightKey: height,
+            AVVideoCompressionPropertiesKey: [
+                AVVideoQualityKey: configuration.quality.avQualityValue
+            ]
+        ]
+
+        let writerInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
+        writerInput.expectsMediaDataInRealTime = false
+
+        guard writer.canAdd(writerInput) else {
+            throw VideoAssemblerError.failedToCreateWriterInput
+        }
+        writer.add(writerInput)
+
+        // Create pixel buffer adaptor
+        let sourcePixelBufferAttributes: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32ARGB,
+            kCVPixelBufferWidthKey as String: width,
+            kCVPixelBufferHeightKey as String: height
+        ]
+
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: writerInput,
+            sourcePixelBufferAttributes: sourcePixelBufferAttributes
+        )
+
+        // Start writing
+        guard writer.startWriting() else {
+            throw VideoAssemblerError.failedToStartWriting
+        }
+        writer.startSession(atSourceTime: .zero)
+
+        // Write frames
+        let frameDuration = CMTime(value: 1, timescale: CMTimeScale(configuration.frameRate))
+
+        for (index, frame) in frames.enumerated() {
+            // Wait for input to be ready
+            while !writerInput.isReadyForMoreMediaData {
+                try await Task.sleep(nanoseconds: 10_000_000) // 10ms
+            }
+
+            let pixelBuffer = try createPixelBuffer(from: frame, width: width, height: height)
+            let presentationTime = CMTimeMultiply(frameDuration, multiplier: Int32(index))
+
+            guard adaptor.append(pixelBuffer, withPresentationTime: presentationTime) else {
+                throw VideoAssemblerError.failedToAppendFrame(index)
+            }
+
+            progress?(Double(index + 1) / Double(frames.count))
+        }
+
+        // Finish writing
+        writerInput.markAsFinished()
+
+        await writer.finishWriting()
+
+        if let error = writer.error {
+            throw VideoAssemblerError.failedToFinishWriting(error)
+        }
+
+        return configuration.outputURL
+    }
+
+    // MARK: - Pixel Buffer Helpers
+
+    /// Creates a CVPixelBuffer from a CGImage.
+    private func createPixelBuffer(from image: CGImage) throws -> CVPixelBuffer {
+        try createPixelBuffer(from: image, width: image.width, height: image.height)
+    }
+
+    /// Creates a CVPixelBuffer from a CGImage with specified dimensions.
+    private func createPixelBuffer(from image: CGImage, width: Int, height: Int) throws -> CVPixelBuffer {
+        let options: [String: Any] = [
+            kCVPixelBufferCGImageCompatibilityKey as String: true,
+            kCVPixelBufferCGBitmapContextCompatibilityKey as String: true
+        ]
+
+        var pixelBuffer: CVPixelBuffer?
+        let status = CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            width,
+            height,
+            kCVPixelFormatType_32ARGB,
+            options as CFDictionary,
+            &pixelBuffer
+        )
+
+        guard status == kCVReturnSuccess, let buffer = pixelBuffer else {
+            throw VideoAssemblerError.failedToCreatePixelBuffer
+        }
+
+        CVPixelBufferLockBaseAddress(buffer, [])
+        defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+
+        guard let context = CGContext(
+            data: CVPixelBufferGetBaseAddress(buffer),
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue
+        ) else {
+            throw VideoAssemblerError.failedToCreatePixelBuffer
+        }
+
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        return buffer
+    }
+
+    /// Creates a CGImage from a CVPixelBuffer.
+    private func createCGImage(from pixelBuffer: CVPixelBuffer) -> CGImage? {
+        var cgImage: CGImage?
+        VTCreateCGImageFromCVPixelBuffer(pixelBuffer, options: nil, imageOut: &cgImage)
+        return cgImage
+    }
+}
