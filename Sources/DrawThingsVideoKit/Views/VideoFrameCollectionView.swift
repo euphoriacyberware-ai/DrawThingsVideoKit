@@ -56,7 +56,29 @@ public struct VideoFrameCollectionView: View {
             HStack {
                 Text("Frames")
                     .font(.headline)
+
+                if !selectedIndices.isEmpty {
+                    Button(role: .destructive) {
+                        onRemove?(IndexSet(selectedIndices))
+                        selectedIndices.removeAll()
+                    } label: {
+                        Label("Remove \(selectedIndices.count)", systemImage: "trash")
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Button {
+                        selectedIndices.removeAll()
+                    } label: {
+                        Text("Deselect")
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                }
+
                 Spacer()
+
                 Text("\(frames.count)")
                     .font(.caption)
                     .padding(.horizontal, 8)

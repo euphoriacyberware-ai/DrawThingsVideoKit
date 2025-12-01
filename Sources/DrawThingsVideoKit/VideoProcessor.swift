@@ -33,8 +33,12 @@ public enum VideoProcessorEvent: Sendable {
     case framesCollected(jobId: UUID, count: Int)
 }
 
+/// A closure that generates a VideoConfiguration for a given job ID.
+/// This allows dynamic output URLs based on job ID.
+public typealias VideoConfigurationProvider = @Sendable (UUID) -> VideoConfiguration?
+
 /// Configuration for automatic video assembly from queue jobs.
-public struct VideoProcessorConfiguration: Sendable {
+public struct VideoProcessorConfiguration: @unchecked Sendable {
     /// Whether to automatically assemble videos when jobs complete.
     public var autoAssemble: Bool
 
@@ -42,22 +46,30 @@ public struct VideoProcessorConfiguration: Sendable {
     public var minimumFrames: Int
 
     /// Default video configuration to use for auto-assembly.
+    /// Used when `configurationProvider` is nil or returns nil.
     public var defaultVideoConfiguration: VideoConfiguration
 
     /// Whether to collect frames from all completed jobs or just marked video jobs.
     public var collectAllCompletedJobs: Bool
+
+    /// Optional provider for dynamic video configuration per job.
+    /// When set, this is called with the job ID to generate a configuration
+    /// with a unique output URL (e.g., `{outputDir}/{jobId}.mp4`).
+    public var configurationProvider: VideoConfigurationProvider?
 
     /// Creates a new processor configuration.
     public init(
         autoAssemble: Bool = false,
         minimumFrames: Int = 2,
         defaultVideoConfiguration: VideoConfiguration,
-        collectAllCompletedJobs: Bool = false
+        collectAllCompletedJobs: Bool = false,
+        configurationProvider: VideoConfigurationProvider? = nil
     ) {
         self.autoAssemble = autoAssemble
         self.minimumFrames = minimumFrames
         self.defaultVideoConfiguration = defaultVideoConfiguration
         self.collectAllCompletedJobs = collectAllCompletedJobs
+        self.configurationProvider = configurationProvider
     }
 }
 
@@ -227,6 +239,13 @@ public final class VideoProcessor: ObservableObject {
         collectedFrames.removeAll()
     }
 
+    /// Remove frames at the specified indices.
+    ///
+    /// - Parameter indices: The indices of frames to remove.
+    public func removeFrames(at indices: IndexSet) {
+        collectedFrames.remove(at: indices)
+    }
+
     // MARK: - Manual Assembly
 
     /// Assemble collected frames into a video.
@@ -342,8 +361,17 @@ public final class VideoProcessor: ObservableObject {
     private func triggerAutoAssembly(forJobId jobId: UUID) async {
         guard !isAssembling else { return }
 
+        // Get configuration from provider or use default
+        let videoConfig: VideoConfiguration
+        if let provider = configuration.configurationProvider,
+           let config = provider(jobId) {
+            videoConfig = config
+        } else {
+            videoConfig = configuration.defaultVideoConfiguration
+        }
+
         do {
-            try await assembleCollectedFrames()
+            try await assemble(frames: collectedFrames, configuration: videoConfig)
             // Clear frames after successful assembly
             clearFrames()
         } catch {
