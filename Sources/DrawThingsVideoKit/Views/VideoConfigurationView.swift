@@ -39,7 +39,8 @@ public struct VideoConfigurationView: View {
     @Binding var interpolationFactor: Int
 
     /// Common frame rate options.
-    private let frameRateOptions = [12, 15, 24, 30, 60]
+    /// Note: Draw Things currently generates video at 16 FPS (model limitation).
+    private let frameRateOptions = [12, 15, 16, 24, 30, 60]
 
     /// Interpolation factor options.
     private let interpolationFactors = [2, 3, 4]
@@ -105,7 +106,7 @@ public struct VideoConfigurationView: View {
 #Preview {
     Form {
         VideoConfigurationView(
-            frameRate: .constant(24),
+            frameRate: .constant(16),
             codec: .constant(.h264),
             quality: .constant(.high),
             interpolationEnabled: .constant(true),

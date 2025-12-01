@@ -47,7 +47,7 @@ public struct VideoConfiguration: Sendable {
     ///
     /// - Parameters:
     ///   - outputURL: The destination URL for the video file.
-    ///   - frameRate: Target frame rate (default: 24).
+    ///   - frameRate: Target frame rate (default: 16, matching Draw Things output).
     ///   - codec: Video codec to use (default: .h264).
     ///   - quality: Encoding quality preset (default: .high).
     ///   - interpolation: Frame interpolation mode (default: .disabled).
@@ -55,7 +55,7 @@ public struct VideoConfiguration: Sendable {
     ///   - audioURL: Optional audio track URL.
     public init(
         outputURL: URL,
-        frameRate: Int = 24,
+        frameRate: Int = 16,
         codec: VideoCodec = .h264,
         quality: VideoQuality = .high,
         interpolation: InterpolationMode = .disabled,
