@@ -31,7 +31,7 @@ Settings for video output including codec, quality, and frame rate:
 ```swift
 let config = VideoConfiguration(
     outputURL: outputURL,
-    frameRate: 24,
+    frameRate: 16,  // Default matches Draw Things output
     codec: .h264,
     quality: .high,
     interpolation: .enabled(factor: 2)
@@ -40,12 +40,12 @@ let config = VideoConfiguration(
 
 **Properties:**
 - `outputURL: URL` - Destination for the video file
-- `frameRate: Int` - Target frame rate (default: 24)
+- `frameRate: Int` - Target frame rate (default: 16, matching Draw Things output)
 - `codec: VideoCodec` - Video codec (.h264, .hevc, .proRes422, .proRes4444)
 - `quality: VideoQuality` - Encoding quality (.low, .medium, .high, .maximum)
 - `interpolation: InterpolationMode` - Frame interpolation (.disabled or .enabled(factor:))
 - `overwriteExisting: Bool` - Whether to overwrite existing files (default: true)
-- `audioURL: URL?` - Optional audio track
+- `audioURL: URL?` - Optional audio track (planned for future release)
 
 ### VideoFrameCollection
 
@@ -65,6 +65,9 @@ let collection = VideoFrameCollection(images: platformImages)
 var collection = VideoFrameCollection()
 collection.append(url: imageURL)
 collection.append(cgImage: cgImage)
+
+// Remove frames
+collection.remove(at: IndexSet([0, 2, 5]))
 ```
 
 ### VideoAssembler
@@ -84,15 +87,32 @@ let outputURL = try await assembler.assemble(
 
 ### VideoProcessor
 
-High-level coordinator that integrates with DrawThingsKit's JobQueue:
+High-level coordinator that integrates with DrawThingsKit's JobQueue. Supports two modes of operation:
+
+#### Automatic Mode (Recommended)
+
+Subscribes to JobQueue events and automatically assembles videos when video jobs complete:
 
 ```swift
-// Create processor
+// Create a configuration provider for dynamic per-job output URLs
+let configProvider: VideoConfigurationProvider = { jobId in
+    let outputURL = outputDirectory.appendingPathComponent("\(jobId).mp4")
+    return VideoConfiguration(
+        outputURL: outputURL,
+        frameRate: 16,
+        codec: .h264,
+        quality: .high
+    )
+}
+
+// Create processor with auto-assembly enabled
 let processor = VideoProcessor(
     configuration: VideoProcessorConfiguration(
         autoAssemble: true,
-        minimumFrames: 10,
-        defaultVideoConfiguration: videoConfig
+        minimumFrames: 2,
+        defaultVideoConfiguration: defaultConfig,
+        collectAllCompletedJobs: false,  // Only collect video jobs (numFrames > 1)
+        configurationProvider: configProvider
     )
 )
 
@@ -100,20 +120,51 @@ let processor = VideoProcessor(
 processor.events
     .sink { event in
         switch event {
-        case .assemblyCompleted(_, let url):
+        case .assemblyStarted(let jobId):
+            print("Assembly started for \(jobId)")
+        case .assemblyProgress(let jobId, let progress):
+            print("Progress: \(Int(progress * 100))%")
+        case .assemblyCompleted(let jobId, let url):
             print("Video saved to: \(url)")
-        case .assemblyFailed(_, let error):
+        case .assemblyFailed(let jobId, let error):
             print("Assembly failed: \(error)")
-        case .framesCollected(_, let count):
-            print("Collected \(count) frames")
-        default:
-            break
+        case .framesCollected(let jobId, let count):
+            print("Collected \(count) frames from \(jobId)")
         }
     }
     .store(in: &cancellables)
 
-// Connect to DrawThingsKit job queue
-await processor.connect(to: queue)
+// Connect to job queue - processor will automatically handle video jobs
+processor.connect(to: queue)
+```
+
+#### Manual Mode
+
+For more control, disable auto-assembly and trigger manually:
+
+```swift
+let processor = VideoProcessor(
+    configuration: VideoProcessorConfiguration(
+        autoAssemble: false,
+        minimumFrames: 2,
+        defaultVideoConfiguration: videoConfig
+    )
+)
+
+// Manually add frames
+processor.addFrames(from: images, job: job)
+
+// Or add from URLs
+processor.addFrames(from: imageURLs)
+
+// Remove unwanted frames
+processor.removeFrames(at: IndexSet([0, 5]))
+
+// Assemble when ready
+let outputURL = try await processor.assembleCollectedFrames()
+
+// Clear for next batch
+processor.clearFrames()
 ```
 
 ## UI Components
@@ -123,7 +174,7 @@ await processor.connect(to: queue)
 SwiftUI view for configuring video output settings:
 
 ```swift
-@State private var frameRate: Int = 24
+@State private var frameRate: Int = 16
 @State private var codec: VideoCodec = .h264
 @State private var quality: VideoQuality = .high
 @State private var interpolationEnabled: Bool = false
@@ -138,31 +189,49 @@ VideoConfigurationView(
 )
 ```
 
+Provides pickers for:
+- Frame rate (12, 15, 16, 24, 30, 60 fps)
+- Video codec (H.264, HEVC, ProRes 422, ProRes 4444)
+- Quality preset (Low, Medium, High, Maximum)
+- Frame interpolation toggle and multiplier (2x, 3x, 4x)
+
 ### VideoAssemblyProgressView
 
 Displays video assembly progress and status:
 
 ```swift
-@ObservedObject var processor: VideoProcessor
-
 VideoAssemblyProgressView(processor: processor) { outputURL in
-    // Video is ready
+    // Video is ready - open in Finder, preview, etc.
     print("Video saved to: \(outputURL)")
 }
 ```
 
+Shows:
+- Progress bar during assembly with percentage
+- Stage indicator (interpolating vs encoding)
+- Completion status with "Show in Finder" button (macOS)
+- Error display on failure
+- Frame count when ready to assemble
+
 ### VideoFrameCollectionView
 
-Displays collected frames with thumbnails:
+Displays collected frames with thumbnails and selection support:
 
 ```swift
 VideoFrameCollectionView(
     frames: processor.collectedFrames,
     thumbnailSize: 80
 ) { indicesToRemove in
-    // Handle frame removal
+    processor.removeFrames(at: indicesToRemove)
 }
 ```
+
+Features:
+- Horizontal scrolling thumbnail grid
+- Frame count indicator
+- Tap to select/deselect frames
+- "Remove N" button appears when frames are selected
+- "Deselect" button to clear selection
 
 ## Complete Example
 
@@ -172,52 +241,98 @@ import DrawThingsKit
 import DrawThingsVideoKit
 import Combine
 
-struct VideoGenerationView: View {
-    @StateObject private var queue = JobQueue()
-    @StateObject private var processor: VideoProcessor
-    @StateObject private var connectionManager = ConnectionManager()
+@MainActor
+class VideoSettings: ObservableObject {
+    @Published var videoModeEnabled = false
+    @Published var frameRate = 16
+    @Published var codec: VideoCodec = .h264
+    @Published var quality: VideoQuality = .high
+    @Published var outputDirectory: URL?
 
-    @State private var cancellables = Set<AnyCancellable>()
+    let videoProcessor: VideoProcessor
 
     init() {
-        let outputURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("output.mp4")
+        // Set default output directory
+        outputDirectory = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first
 
-        let videoConfig = VideoConfiguration(
-            outputURL: outputURL,
-            frameRate: 24,
-            interpolation: .disabled
+        // Create processor with configuration provider for per-job output URLs
+        let defaultConfig = VideoConfiguration(
+            outputURL: FileManager.default.temporaryDirectory.appendingPathComponent("temp.mp4")
         )
 
-        _processor = StateObject(wrappedValue: VideoProcessor(
-            configuration: VideoProcessorConfiguration(
-                autoAssemble: false,
-                minimumFrames: 10,
-                defaultVideoConfiguration: videoConfig,
-                collectAllCompletedJobs: true
+        let configProvider: VideoConfigurationProvider = { [weak self] jobId in
+            guard let self = self, let dir = self.outputDirectory else { return nil }
+            return VideoConfiguration(
+                outputURL: dir.appendingPathComponent("\(jobId).mp4"),
+                frameRate: self.frameRate,
+                codec: self.codec,
+                quality: self.quality
             )
-        ))
+        }
+
+        videoProcessor = VideoProcessor(
+            configuration: VideoProcessorConfiguration(
+                autoAssemble: true,
+                minimumFrames: 2,
+                defaultVideoConfiguration: defaultConfig,
+                configurationProvider: configProvider
+            )
+        )
     }
+
+    func connect(to queue: JobQueue) {
+        guard videoModeEnabled else { return }
+        videoProcessor.connect(to: queue)
+    }
+
+    func disconnect() {
+        videoProcessor.disconnect()
+    }
+}
+
+struct ContentView: View {
+    @StateObject private var queue = JobQueue()
+    @StateObject private var videoSettings = VideoSettings()
 
     var body: some View {
         VStack {
-            // Frame collection display
-            VideoFrameCollectionView(frames: processor.collectedFrames)
+            Toggle("Video Mode", isOn: $videoSettings.videoModeEnabled)
 
-            // Assembly progress
-            VideoAssemblyProgressView(processor: processor)
+            if videoSettings.videoModeEnabled {
+                // Configuration
+                VideoConfigurationView(
+                    frameRate: $videoSettings.frameRate,
+                    codec: $videoSettings.codec,
+                    quality: $videoSettings.quality,
+                    interpolationEnabled: .constant(false),
+                    interpolationFactor: .constant(2)
+                )
 
-            // Assemble button
-            Button("Assemble Video") {
-                Task {
-                    try await processor.assembleCollectedFrames()
+                // Progress indicator
+                VideoAssemblyProgressView(processor: videoSettings.videoProcessor)
+
+                // Frame collection with removal support
+                VideoFrameCollectionView(
+                    frames: videoSettings.videoProcessor.collectedFrames,
+                    thumbnailSize: 60
+                ) { indices in
+                    videoSettings.videoProcessor.removeFrames(at: indices)
                 }
             }
-            .disabled(processor.collectedFrames.isEmpty || processor.isAssembling)
         }
-        .task {
-            // Connect processor to job queue
-            processor.connect(to: queue)
+        .onChange(of: videoSettings.videoModeEnabled) { _, enabled in
+            if enabled {
+                videoSettings.connect(to: queue)
+            } else {
+                videoSettings.disconnect()
+            }
+        }
+        .onReceive(videoSettings.videoProcessor.events) { event in
+            if case .assemblyCompleted(_, let url) = event {
+                #if os(macOS)
+                NSWorkspace.shared.selectFile(url.path, inFileViewerRootedAtPath: "")
+                #endif
+            }
         }
     }
 }
@@ -230,12 +345,13 @@ DrawThingsVideoKit includes frame interpolation using Core Image's dissolve tran
 ```swift
 let config = VideoConfiguration(
     outputURL: outputURL,
-    frameRate: 24,
+    frameRate: 16,
     interpolation: .enabled(factor: 2)  // Doubles frame count
 )
 ```
 
 **Note:** This uses simple cross-fade blending, not motion-based interpolation. For advanced optical flow interpolation, consider integrating with external ML models.
+
 
 ## License
 
