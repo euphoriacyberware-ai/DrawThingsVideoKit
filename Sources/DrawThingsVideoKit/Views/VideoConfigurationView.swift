@@ -85,21 +85,24 @@ public struct VideoConfigurationView: View {
         }
 
         Section("Frame Interpolation") {
-            Toggle("Enable Interpolation", isOn: $interpolationEnabled)
-                .help("Use VTFrameInterpolation to generate smooth intermediate frames")
-
-            if interpolationEnabled {
-                Picker("Multiplier", selection: $interpolationFactor) {
-                    ForEach(interpolationFactors, id: \.self) { factor in
-                        Text("\(factor)x").tag(factor)
+            Toggle("Enable Interpolation (2x)", isOn: $interpolationEnabled)
+                .help("Insert blended intermediate frames for smoother playback")
+                .onChange(of: interpolationEnabled) { _, enabled in
+                    if enabled {
+                        interpolationFactor = 2
                     }
                 }
-                .help("Number of frames to generate between each original frame")
 
-                Text("Output will have \(interpolationFactor)x the original frame count")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
+            // Multiplier picker - hidden for now, defaults to 2x
+            // Uncomment to allow user selection of interpolation factor
+            // if interpolationEnabled {
+            //     Picker("Multiplier", selection: $interpolationFactor) {
+            //         ForEach(interpolationFactors, id: \.self) { factor in
+            //             Text("\(factor)x").tag(factor)
+            //         }
+            //     }
+            //     .help("Number of frames to generate between each original frame")
+            // }
         }
     }
 }
