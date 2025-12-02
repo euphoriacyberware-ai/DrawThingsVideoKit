@@ -288,7 +288,11 @@ public actor VideoAssembler {
         writer.startSession(atSourceTime: .zero)
 
         // Write frames
-        let frameDuration = CMTime(value: 1, timescale: CMTimeScale(configuration.frameRate))
+        // When interpolation is enabled, increase frame rate to maintain original duration
+        let effectiveFrameRate = configuration.interpolation.isEnabled
+            ? configuration.frameRate * configuration.interpolation.factor
+            : configuration.frameRate
+        let frameDuration = CMTime(value: 1, timescale: CMTimeScale(effectiveFrameRate))
 
         for (index, frame) in frames.enumerated() {
             // Wait for input to be ready

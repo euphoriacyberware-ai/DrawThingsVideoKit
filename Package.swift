@@ -16,7 +16,10 @@ let package = Package(
         ),
     ],
     dependencies: [
-        .package(url: "https://github.com/euphoriacyberware-ai/DrawThingsKit", from: "2.0.0"),
+	// Use remote URL for release
+	.package(url: "https://github.com/euphoriacyberware-ai/DrawThingsKit", from: "2.0.1"),
+        // Use local path for development; change to remote URL for release
+        //.package(path: "../DrawThingsKit"),
     ],
     targets: [
         .target(
