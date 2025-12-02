@@ -61,13 +61,6 @@ public struct VideoConfigurationView: View {
 
     public var body: some View {
         Section("Video Output") {
-            // Frame Rate
-            Picker("Frame Rate", selection: $frameRate) {
-                ForEach(frameRateOptions, id: \.self) { rate in
-                    Text("\(rate) fps").tag(rate)
-                }
-            }
-
             // Codec
             Picker("Codec", selection: $codec) {
                 ForEach(VideoCodec.allCases, id: \.self) { codec in
@@ -81,6 +74,14 @@ public struct VideoConfigurationView: View {
                     Text(quality.displayName).tag(quality)
                 }
             }
+
+            // Frame Rate - hidden for now as Draw Things outputs at fixed 16 FPS
+            // Uncomment when variable frame rate support is added to Draw Things
+            // Picker("Frame Rate", selection: $frameRate) {
+            //     ForEach(frameRateOptions, id: \.self) { rate in
+            //         Text("\(rate) fps").tag(rate)
+            //     }
+            // }
         }
 
         Section("Frame Interpolation") {
