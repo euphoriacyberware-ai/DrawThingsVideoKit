@@ -40,7 +40,7 @@ let config = VideoConfiguration(
 
 **Properties:**
 - `outputURL: URL` - Destination for the video file
-- `frameRate: Int` - Target frame rate (default: 16, matching Draw Things output)
+- `frameRate: Int` - Source frame rate (default: 16, matching Draw Things output)
 - `codec: VideoCodec` - Video codec (.h264, .hevc, .proRes422, .proRes4444)
 - `quality: VideoQuality` - Encoding quality (.low, .medium, .high, .maximum)
 - `interpolation: InterpolationMode` - Frame interpolation (.disabled or .enabled(factor:))
@@ -189,11 +189,10 @@ VideoConfigurationView(
 )
 ```
 
-Provides pickers for:
-- Frame rate (12, 15, 16, 24, 30, 60 fps)
+Provides controls for:
 - Video codec (H.264, HEVC, ProRes 422, ProRes 4444)
 - Quality preset (Low, Medium, High, Maximum)
-- Frame interpolation toggle and multiplier (2x, 3x, 4x)
+- Frame interpolation toggle (2x)
 
 ### VideoAssemblyProgressView
 
@@ -244,9 +243,9 @@ import Combine
 @MainActor
 class VideoSettings: ObservableObject {
     @Published var videoModeEnabled = false
-    @Published var frameRate = 16
     @Published var codec: VideoCodec = .h264
     @Published var quality: VideoQuality = .high
+    @Published var interpolationEnabled: Bool = false
     @Published var outputDirectory: URL?
 
     let videoProcessor: VideoProcessor
@@ -264,9 +263,10 @@ class VideoSettings: ObservableObject {
             guard let self = self, let dir = self.outputDirectory else { return nil }
             return VideoConfiguration(
                 outputURL: dir.appendingPathComponent("\(jobId).mp4"),
-                frameRate: self.frameRate,
+                frameRate: 16,
                 codec: self.codec,
-                quality: self.quality
+                quality: self.quality,
+                interpolation: self.interpolationEnabled ? .enabled(factor: 2) : .disabled
             )
         }
 
@@ -301,10 +301,10 @@ struct ContentView: View {
             if videoSettings.videoModeEnabled {
                 // Configuration
                 VideoConfigurationView(
-                    frameRate: $videoSettings.frameRate,
+                    frameRate: .constant(16),
                     codec: $videoSettings.codec,
                     quality: $videoSettings.quality,
-                    interpolationEnabled: .constant(false),
+                    interpolationEnabled: $videoSettings.interpolationEnabled,
                     interpolationFactor: .constant(2)
                 )
 
@@ -340,18 +340,39 @@ struct ContentView: View {
 
 ## Frame Interpolation
 
-DrawThingsVideoKit includes frame interpolation using Core Image's dissolve transition. This creates smooth cross-fade effects between frames:
+DrawThingsVideoKit includes frame interpolation using Core Image's `CIDissolveTransition` filter. This creates cross-fade blended intermediate frames between original frames:
 
 ```swift
 let config = VideoConfiguration(
     outputURL: outputURL,
     frameRate: 16,
-    interpolation: .enabled(factor: 2)  // Doubles frame count
+    interpolation: .enabled(factor: 2)  // Doubles frame count, doubles output frame rate
 )
 ```
 
-**Note:** This uses simple cross-fade blending, not motion-based interpolation. For advanced optical flow interpolation, consider integrating with external ML models.
+When interpolation is enabled:
+- Intermediate frames are generated using cross-fade blending between consecutive frames
+- The output frame rate is automatically increased to maintain the original video duration
+- For example: 81 frames at 16 FPS with 2x interpolation = 161 frames at 32 FPS (~5 seconds)
 
+**Limitations:** This uses simple dissolve blending, not motion-based optical flow interpolation. It works well for slow, gradual movements typical of diffusion model outputs, but fast motion may show ghosting artifacts. For advanced motion-based interpolation, consider integrating with external ML models.
+
+## App Sandbox Entitlements
+
+For macOS apps using App Sandbox, you'll need the following entitlements to save videos to user-selected directories:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+</dict>
+</plist>
+```
 
 ## License
 
