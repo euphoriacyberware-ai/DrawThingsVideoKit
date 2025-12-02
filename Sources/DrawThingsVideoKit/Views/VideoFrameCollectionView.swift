@@ -20,6 +20,7 @@ import UIKit
 /// - Thumbnail grid of collected frames
 /// - Frame count indicator
 /// - Selection support for removing frames
+/// - Reprocess button to re-encode with current settings
 /// - Drag-and-drop reordering (macOS)
 ///
 /// Example usage:
@@ -30,24 +31,33 @@ import UIKit
 ///     frames: processor.collectedFrames,
 ///     onRemove: { indices in
 ///         // Handle frame removal
+///     },
+///     onReprocess: {
+///         // Reprocess frames with current settings
 ///     }
 /// )
 /// ```
 public struct VideoFrameCollectionView: View {
     let frames: VideoFrameCollection
     var onRemove: ((IndexSet) -> Void)?
+    var onReprocess: (() -> Void)?
     var thumbnailSize: CGFloat
+    var isReprocessing: Bool
 
     @State private var selectedIndices: Set<Int> = []
 
     public init(
         frames: VideoFrameCollection,
         thumbnailSize: CGFloat = 80,
-        onRemove: ((IndexSet) -> Void)? = nil
+        onRemove: ((IndexSet) -> Void)? = nil,
+        onReprocess: (() -> Void)? = nil,
+        isReprocessing: Bool = false
     ) {
         self.frames = frames
         self.thumbnailSize = thumbnailSize
         self.onRemove = onRemove
+        self.onReprocess = onReprocess
+        self.isReprocessing = isReprocessing
     }
 
     public var body: some View {
@@ -78,6 +88,25 @@ public struct VideoFrameCollectionView: View {
                 }
 
                 Spacer()
+
+                // Reprocess button
+                if let onReprocess = onReprocess, !frames.isEmpty {
+                    Button {
+                        onReprocess()
+                    } label: {
+                        if isReprocessing {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Label("Reprocess", systemImage: "arrow.triangle.2.circlepath")
+                                .labelStyle(.titleAndIcon)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(isReprocessing)
+                    .help("Re-encode video with current interpolation and upscaling settings")
+                }
 
                 Text("\(frames.count)")
                     .font(.caption)

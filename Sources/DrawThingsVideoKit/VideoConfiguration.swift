@@ -40,6 +40,12 @@ public struct VideoConfiguration: Sendable {
     /// Preferred interpolation method (nil = auto-select best available).
     public var interpolationMethod: InterpolationMethod?
 
+    /// Super resolution settings.
+    public var superResolution: SuperResolutionMode
+
+    /// Preferred super resolution method (nil = auto-select best available).
+    public var superResolutionMethod: SuperResolutionMethod?
+
     /// Whether to overwrite existing files at the output URL.
     public var overwriteExisting: Bool
 
@@ -55,6 +61,8 @@ public struct VideoConfiguration: Sendable {
     ///   - quality: Encoding quality preset (default: .high).
     ///   - interpolation: Frame interpolation mode (default: .disabled).
     ///   - interpolationMethod: Preferred interpolation method (default: nil for auto).
+    ///   - superResolution: Super resolution mode (default: .disabled).
+    ///   - superResolutionMethod: Preferred super resolution method (default: nil for auto).
     ///   - overwriteExisting: Whether to overwrite existing files (default: true).
     ///   - audioURL: Optional audio track URL.
     public init(
@@ -64,6 +72,8 @@ public struct VideoConfiguration: Sendable {
         quality: VideoQuality = .high,
         interpolation: InterpolationMode = .disabled,
         interpolationMethod: InterpolationMethod? = nil,
+        superResolution: SuperResolutionMode = .disabled,
+        superResolutionMethod: SuperResolutionMethod? = nil,
         overwriteExisting: Bool = true,
         audioURL: URL? = nil
     ) {
@@ -73,6 +83,8 @@ public struct VideoConfiguration: Sendable {
         self.quality = quality
         self.interpolation = interpolation
         self.interpolationMethod = interpolationMethod
+        self.superResolution = superResolution
+        self.superResolutionMethod = superResolutionMethod
         self.overwriteExisting = overwriteExisting
         self.audioURL = audioURL
     }
@@ -190,6 +202,38 @@ public enum InterpolationMode: Sendable, Equatable {
     }
 
     /// The interpolation factor (1 if disabled).
+    public var factor: Int {
+        switch self {
+        case .disabled:
+            return 1
+        case .enabled(let factor):
+            return max(1, factor)
+        }
+    }
+}
+
+// MARK: - Super Resolution Mode
+
+/// Super resolution mode for upscaling video frames.
+public enum SuperResolutionMode: Sendable, Equatable {
+    /// No super resolution upscaling.
+    case disabled
+
+    /// Enable super resolution with a scale factor.
+    /// A factor of 2 doubles the resolution (e.g., 512x512 -> 1024x1024).
+    case enabled(factor: Int)
+
+    /// Whether super resolution is enabled.
+    public var isEnabled: Bool {
+        switch self {
+        case .disabled:
+            return false
+        case .enabled:
+            return true
+        }
+    }
+
+    /// The scale factor (1 if disabled).
     public var factor: Int {
         switch self {
         case .disabled:
