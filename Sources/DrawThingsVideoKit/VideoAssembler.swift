@@ -8,7 +8,7 @@
 import Foundation
 import AVFoundation
 import CoreGraphics
-import CoreImage
+import CoreVideo
 import VideoToolbox
 
 /// Errors that can occur during video assembly.
@@ -60,7 +60,11 @@ public enum VideoAssemblerError: Error, LocalizedError {
 ///
 /// VideoAssembler handles the low-level details of creating video files from
 /// sequences of images, including codec selection, quality settings, and
-/// optional frame interpolation using Core Image blending.
+/// optional frame interpolation.
+///
+/// On macOS 26+ and iOS 26+, frame interpolation uses Apple's VTFrameProcessor
+/// for high-quality motion-aware interpolation. On older systems, it falls back
+/// to Core Image dissolve transitions.
 ///
 /// Example usage:
 /// ```swift
@@ -80,12 +84,20 @@ public enum VideoAssemblerError: Error, LocalizedError {
 /// }
 /// ```
 public actor VideoAssembler {
-    /// Core Image context for frame blending.
-    private let ciContext: CIContext
+    /// Frame interpolator instance.
+    private let interpolator: FrameInterpolator
 
     /// Creates a new video assembler.
-    public init() {
-        self.ciContext = CIContext(options: [.useSoftwareRenderer: false])
+    /// - Parameter preferredInterpolationMethod: Optionally force a specific interpolation method.
+    public init(preferredInterpolationMethod: InterpolationMethod? = nil) {
+        self.interpolator = FrameInterpolator(preferredMethod: preferredInterpolationMethod)
+    }
+
+    /// The interpolation method that will be used.
+    public var activeInterpolationMethod: InterpolationMethod {
+        get async {
+            await interpolator.activeMethod
+        }
     }
 
     /// Assembles frames into a video file.
@@ -124,8 +136,8 @@ public actor VideoAssembler {
         // Apply interpolation if enabled
         let finalFrames: [CGImage]
         if configuration.interpolation.isEnabled {
-            finalFrames = try interpolateFrames(
-                cgImages,
+            finalFrames = try await interpolator.interpolate(
+                frames: cgImages,
                 factor: configuration.interpolation.factor,
                 progress: { p in progress?(p * 0.5) } // First 50% for interpolation
             )
@@ -144,81 +156,6 @@ public actor VideoAssembler {
         )
 
         return outputURL
-    }
-
-    // MARK: - Frame Interpolation
-
-    /// Interpolates frames using Core Image blending.
-    ///
-    /// This uses a cross-dissolve blend between frames to create smooth transitions.
-    /// For true motion-based interpolation, consider using external ML models.
-    private func interpolateFrames(
-        _ frames: [CGImage],
-        factor: Int,
-        progress: (@Sendable (Double) -> Void)?
-    ) throws -> [CGImage] {
-        guard factor > 1, frames.count >= 2 else {
-            return frames
-        }
-
-        var result: [CGImage] = []
-        let totalPairs = frames.count - 1
-
-        for i in 0..<totalPairs {
-            result.append(frames[i])
-
-            // Generate intermediate frames using blend
-            let intermediateFrames = try generateBlendedFrames(
-                from: frames[i],
-                to: frames[i + 1],
-                count: factor - 1
-            )
-            result.append(contentsOf: intermediateFrames)
-
-            progress?(Double(i + 1) / Double(totalPairs))
-        }
-
-        // Add the last frame
-        result.append(frames[frames.count - 1])
-
-        return result
-    }
-
-    /// Generates intermediate frames between two images using Core Image blending.
-    private func generateBlendedFrames(
-        from startFrame: CGImage,
-        to endFrame: CGImage,
-        count: Int
-    ) throws -> [CGImage] {
-        guard count > 0 else { return [] }
-
-        let startImage = CIImage(cgImage: startFrame)
-        let endImage = CIImage(cgImage: endFrame)
-
-        var intermediateFrames: [CGImage] = []
-        let extent = startImage.extent
-
-        for i in 1...count {
-            let fraction = CGFloat(i) / CGFloat(count + 1)
-
-            // Use CIBlendWithMask or simple dissolve
-            guard let blendFilter = CIFilter(name: "CIDissolveTransition") else {
-                throw VideoAssemblerError.interpolationFailed(nil)
-            }
-
-            blendFilter.setValue(startImage, forKey: kCIInputImageKey)
-            blendFilter.setValue(endImage, forKey: kCIInputTargetImageKey)
-            blendFilter.setValue(fraction, forKey: kCIInputTimeKey)
-
-            guard let outputImage = blendFilter.outputImage,
-                  let cgImage = ciContext.createCGImage(outputImage, from: extent) else {
-                throw VideoAssemblerError.interpolationFailed(nil)
-            }
-
-            intermediateFrames.append(cgImage)
-        }
-
-        return intermediateFrames
     }
 
     // MARK: - Video Writing

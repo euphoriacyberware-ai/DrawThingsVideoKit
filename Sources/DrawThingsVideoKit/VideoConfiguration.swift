@@ -37,6 +37,9 @@ public struct VideoConfiguration: Sendable {
     /// Frame interpolation settings.
     public var interpolation: InterpolationMode
 
+    /// Preferred interpolation method (nil = auto-select best available).
+    public var interpolationMethod: InterpolationMethod?
+
     /// Whether to overwrite existing files at the output URL.
     public var overwriteExisting: Bool
 
@@ -51,6 +54,7 @@ public struct VideoConfiguration: Sendable {
     ///   - codec: Video codec to use (default: .h264).
     ///   - quality: Encoding quality preset (default: .high).
     ///   - interpolation: Frame interpolation mode (default: .disabled).
+    ///   - interpolationMethod: Preferred interpolation method (default: nil for auto).
     ///   - overwriteExisting: Whether to overwrite existing files (default: true).
     ///   - audioURL: Optional audio track URL.
     public init(
@@ -59,6 +63,7 @@ public struct VideoConfiguration: Sendable {
         codec: VideoCodec = .h264,
         quality: VideoQuality = .high,
         interpolation: InterpolationMode = .disabled,
+        interpolationMethod: InterpolationMethod? = nil,
         overwriteExisting: Bool = true,
         audioURL: URL? = nil
     ) {
@@ -67,6 +72,7 @@ public struct VideoConfiguration: Sendable {
         self.codec = codec
         self.quality = quality
         self.interpolation = interpolation
+        self.interpolationMethod = interpolationMethod
         self.overwriteExisting = overwriteExisting
         self.audioURL = audioURL
     }
