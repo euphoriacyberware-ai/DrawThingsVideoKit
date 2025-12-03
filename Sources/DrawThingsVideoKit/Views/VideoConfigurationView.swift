@@ -67,6 +67,24 @@ public struct VideoConfigurationView: View {
     /// Interpolation factor options.
     private let interpolationFactors = [2, 3, 4]
 
+    /// Target frame rate presets for interpolation.
+    /// Based on source 16fps from Draw Things video generation.
+    private struct TargetFrameRate: Identifiable, Hashable {
+        let fps: Int
+        let label: String
+        let factor: Int
+
+        var id: Int { fps }
+
+        static let presets: [TargetFrameRate] = [
+            TargetFrameRate(fps: 24, label: "24 fps - Cinematic", factor: 2),      // 16 * 1.5 ≈ 24
+            TargetFrameRate(fps: 25, label: "25 fps - PAL", factor: 2),             // 16 * 1.5625 ≈ 25
+            TargetFrameRate(fps: 30, label: "30 fps - NTSC", factor: 2),            // 16 * 1.875 ≈ 30
+            TargetFrameRate(fps: 48, label: "48 fps - High Frame Rate", factor: 3), // 16 * 3 = 48
+            TargetFrameRate(fps: 60, label: "60 fps - High Motion", factor: 4),     // 16 * 3.75 ≈ 60
+        ]
+    }
+
     /// Whether VTFrameProcessor is available on this system.
     private var isVTFrameProcessorAvailable: Bool {
         FrameInterpolator.isVTFrameProcessorAvailable
@@ -173,18 +191,30 @@ public struct VideoConfigurationView: View {
             Toggle("Enable Interpolation", isOn: $interpolationEnabled)
                 .help("Insert intermediate frames for smoother playback")
                 .onChange(of: interpolationEnabled) { _, enabled in
-                    if enabled && interpolationFactor < 2 {
-                        interpolationFactor = 2
+                    if enabled {
+                        // Default to 24fps cinematic when enabling
+                        if !TargetFrameRate.presets.contains(where: { $0.fps == frameRate }) {
+                            frameRate = 24
+                        }
+                        if let preset = TargetFrameRate.presets.first(where: { $0.fps == frameRate }) {
+                            interpolationFactor = preset.factor
+                        }
                     }
                 }
 
             if interpolationEnabled {
-                Picker("Multiplier", selection: $interpolationFactor) {
-                    ForEach(interpolationFactors, id: \.self) { factor in
-                        Text("\(factor)x").tag(factor)
+                Picker("Target Frame Rate", selection: $frameRate) {
+                    ForEach(TargetFrameRate.presets) { preset in
+                        Text(preset.label).tag(preset.fps)
                     }
                 }
-                .help("Number of intermediate frames to generate between each original frame")
+                .help("Output video frame rate (source is 16 fps)")
+                .onChange(of: frameRate) { _, newFps in
+                    // Update interpolation factor based on selected frame rate
+                    if let preset = TargetFrameRate.presets.first(where: { $0.fps == newFps }) {
+                        interpolationFactor = preset.factor
+                    }
+                }
 
                 if isVTFrameProcessorAvailable {
                     // User can choose between methods
