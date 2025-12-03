@@ -48,7 +48,8 @@ let config = VideoConfiguration(
 
 **Properties:**
 - `outputURL: URL` - Destination for the video file
-- `frameRate: Int` - Output frame rate (default: 16, matching Draw Things output)
+- `sourceFrameRate: Int` - Source frame rate of input frames (default: 16, matching Draw Things output)
+- `frameRate: Int` - Target output frame rate when interpolation is enabled (default: 24)
 - `codec: VideoCodec` - Video codec (.h264, .hevc, .proRes422, .proRes4444)
 - `quality: VideoQuality` - Encoding quality (.low, .medium, .high, .maximum)
 - `interpolation: InterpolationMode` - Frame interpolation (.disabled or .enabled(factor:))
@@ -57,6 +58,8 @@ let config = VideoConfiguration(
 - `superResolutionMethod: SuperResolutionMethod?` - Preferred method (.vtSuperResolution, .vtLowLatency, or .coreImageLanczos)
 - `overwriteExisting: Bool` - Whether to overwrite existing files (default: true)
 - `audioURL: URL?` - Optional audio track (planned for future release)
+
+**Note:** When interpolation is disabled, `sourceFrameRate` is used for encoding to maintain correct video duration. When interpolation is enabled, `frameRate` determines the output playback rate.
 
 ### VideoFrameCollection
 
@@ -276,19 +279,21 @@ Features:
 
 ## Frame Interpolation
 
-DrawThingsVideoKit supports frame interpolation to increase output frame rate for smoother video playback. Draw Things generates video at 16 FPS (model limitation), and interpolation can increase this to standard frame rates.
+DrawThingsVideoKit supports frame interpolation to increase output frame rate for smoother video playback. Draw Things generates video at 16 FPS (model limitation), and interpolation can increase this to higher frame rates.
 
 ### Target Frame Rate Presets
 
-The UI provides intuitive frame rate targets based on source 16 FPS:
+The UI provides frame rate presets based on source 16 FPS. Interpolation uses integer factors (2x, 3x, 4x), which affects duration:
 
-| Target | Label | Use Case |
-|--------|-------|----------|
-| 24 fps | Cinematic | Film-like motion |
-| 25 fps | PAL | European broadcast standard |
-| 30 fps | NTSC | North American broadcast standard |
-| 48 fps | High Frame Rate | Enhanced motion clarity |
-| 60 fps | High Motion | Gaming, high-action content |
+| Target | Factor | Duration Effect | Use Case |
+|--------|--------|-----------------|----------|
+| 24 fps | 2x | ~33% slower | Cinematic film look |
+| 30 fps | 2x | ~6% slower | Broadcast standard |
+| 32 fps | 2x | Same duration | Smooth playback |
+| 48 fps | 3x | Same duration | High frame rate |
+| 64 fps | 4x | Same duration | Ultra smooth |
+
+**Duration math:** With 2x interpolation, 81 source frames become ~161 frames. At 32 fps (16×2), duration stays the same. At 24 fps, the video plays slower because the same frames are displayed at a lower rate.
 
 ### Interpolation Methods
 
@@ -306,6 +311,7 @@ The UI provides intuitive frame rate targets based on source 16 FPS:
 ```swift
 let config = VideoConfiguration(
     outputURL: outputURL,
+    sourceFrameRate: 16,  // Draw Things default
     frameRate: 24,
     interpolation: .enabled(factor: 2),
     interpolationMethod: .vtFrameProcessor  // or .coreImageDissolve, or nil for auto

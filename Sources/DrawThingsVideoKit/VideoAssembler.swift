@@ -273,10 +273,11 @@ public actor VideoAssembler {
         writer.startSession(atSourceTime: .zero)
 
         // Write frames
-        // When interpolation is enabled, increase frame rate to maintain original duration
+        // When interpolation is enabled, use the target frame rate directly (it's already the desired output).
+        // When interpolation is disabled, use the source frame rate to maintain correct video duration.
         let effectiveFrameRate = configuration.interpolation.isEnabled
-            ? configuration.frameRate * configuration.interpolation.factor
-            : configuration.frameRate
+            ? configuration.frameRate
+            : configuration.sourceFrameRate
         let frameDuration = CMTime(value: 1, timescale: CMTimeScale(effectiveFrameRate))
 
         for (index, frame) in frames.enumerated() {
