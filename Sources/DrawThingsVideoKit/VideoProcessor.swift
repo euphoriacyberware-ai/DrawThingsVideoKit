@@ -195,6 +195,12 @@ public final class VideoProcessor: ObservableObject {
         let cgImages = images.compactMap { $0.cgImage }
         guard !cgImages.isEmpty else { return }
 
+        // If this is a new job (different from the previous one), clear existing frames
+        // This prevents frames from multiple video generations being mixed together
+        if let existingJobId = collectedFrames.metadata.sourceJobId, existingJobId != job.id {
+            clearFrames()
+        }
+
         // Create metadata from job
         var metadata = collectedFrames.metadata
         if metadata.sourceJobId == nil {
