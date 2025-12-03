@@ -69,6 +69,14 @@ public struct VideoConfigurationView: View {
 
     /// Target frame rate presets for interpolation.
     /// Based on source 16fps from Draw Things video generation.
+    ///
+    /// Duration behavior:
+    /// - Presets marked "same duration" use factor = fps/16, maintaining original timing
+    /// - Presets marked with duration change will alter playback speed
+    ///
+    /// For example, 81 frames at 16 fps = 5.06 seconds:
+    /// - At 24 fps with 2x interpolation (161 frames): 161/24 = 6.7 sec (33% slower)
+    /// - At 32 fps with 2x interpolation (161 frames): 161/32 = 5.0 sec (same duration)
     private struct TargetFrameRate: Identifiable, Hashable {
         let fps: Int
         let label: String
@@ -77,11 +85,13 @@ public struct VideoConfigurationView: View {
         var id: Int { fps }
 
         static let presets: [TargetFrameRate] = [
-            TargetFrameRate(fps: 24, label: "24 fps - Cinematic", factor: 2),      // 16 * 1.5 ≈ 24
-            TargetFrameRate(fps: 25, label: "25 fps - PAL", factor: 2),             // 16 * 1.5625 ≈ 25
-            TargetFrameRate(fps: 30, label: "30 fps - NTSC", factor: 2),            // 16 * 1.875 ≈ 30
-            TargetFrameRate(fps: 48, label: "48 fps - High Frame Rate", factor: 3), // 16 * 3 = 48
-            TargetFrameRate(fps: 60, label: "60 fps - High Motion", factor: 4),     // 16 * 3.75 ≈ 60
+            // Standard frame rates (will change duration)
+            TargetFrameRate(fps: 24, label: "24 fps - Cinematic", factor: 2),
+            TargetFrameRate(fps: 30, label: "30 fps - Broadcast", factor: 2),
+            // Duration-preserving frame rates
+            TargetFrameRate(fps: 32, label: "32 fps - Smooth (same duration)", factor: 2),
+            TargetFrameRate(fps: 48, label: "48 fps - High Frame Rate (same duration)", factor: 3),
+            TargetFrameRate(fps: 64, label: "64 fps - Ultra Smooth (same duration)", factor: 4),
         ]
     }
 
