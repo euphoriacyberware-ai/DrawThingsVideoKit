@@ -52,6 +52,10 @@ public struct VideoProcessorConfiguration: @unchecked Sendable {
     /// Whether to collect frames from all completed jobs or just marked video jobs.
     public var collectAllCompletedJobs: Bool
 
+    /// Whether to clear collected frames after successful auto-assembly.
+    /// Set to `false` to retain frames for reprocessing with different settings.
+    public var clearFramesAfterAssembly: Bool
+
     /// Optional provider for dynamic video configuration per job.
     /// When set, this is called with the job ID to generate a configuration
     /// with a unique output URL (e.g., `{outputDir}/{jobId}.mp4`).
@@ -63,12 +67,14 @@ public struct VideoProcessorConfiguration: @unchecked Sendable {
         minimumFrames: Int = 2,
         defaultVideoConfiguration: VideoConfiguration,
         collectAllCompletedJobs: Bool = false,
+        clearFramesAfterAssembly: Bool = true,
         configurationProvider: VideoConfigurationProvider? = nil
     ) {
         self.autoAssemble = autoAssemble
         self.minimumFrames = minimumFrames
         self.defaultVideoConfiguration = defaultVideoConfiguration
         self.collectAllCompletedJobs = collectAllCompletedJobs
+        self.clearFramesAfterAssembly = clearFramesAfterAssembly
         self.configurationProvider = configurationProvider
     }
 }
@@ -372,8 +378,10 @@ public final class VideoProcessor: ObservableObject {
 
         do {
             try await assemble(frames: collectedFrames, configuration: videoConfig)
-            // Clear frames after successful assembly
-            clearFrames()
+            // Clear frames after successful assembly (if configured)
+            if configuration.clearFramesAfterAssembly {
+                clearFrames()
+            }
         } catch {
             // Error is already published via events
         }
