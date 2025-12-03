@@ -14,6 +14,7 @@ import SwiftUI
 /// - Video codec selection
 /// - Quality preset
 /// - Frame interpolation settings
+/// - Super resolution upscaling settings
 ///
 /// Example usage:
 /// ```swift
@@ -23,6 +24,9 @@ import SwiftUI
 /// @State private var interpolationEnabled: Bool = false
 /// @State private var interpolationFactor: Int = 2
 /// @State private var interpolationMethod: InterpolationMethod? = nil
+/// @State private var superResolutionEnabled: Bool = false
+/// @State private var superResolutionFactor: Int = 2
+/// @State private var superResolutionMethod: SuperResolutionMethod? = nil
 ///
 /// VideoConfigurationView(
 ///     frameRate: $frameRate,
@@ -30,7 +34,10 @@ import SwiftUI
 ///     quality: $quality,
 ///     interpolationEnabled: $interpolationEnabled,
 ///     interpolationFactor: $interpolationFactor,
-///     interpolationMethod: $interpolationMethod
+///     interpolationMethod: $interpolationMethod,
+///     superResolutionEnabled: $superResolutionEnabled,
+///     superResolutionFactor: $superResolutionFactor,
+///     superResolutionMethod: $superResolutionMethod
 /// )
 /// ```
 public struct VideoConfigurationView: View {
@@ -40,6 +47,18 @@ public struct VideoConfigurationView: View {
     @Binding var interpolationEnabled: Bool
     @Binding var interpolationFactor: Int
     @Binding var interpolationMethod: InterpolationMethod?
+    @Binding var superResolutionEnabled: Bool
+    @Binding var superResolutionFactor: Int
+    @Binding var superResolutionMethod: SuperResolutionMethod?
+
+    /// Optional frame dimensions for computing available scale factors.
+    /// When nil, shows all common options.
+    var frameDimensions: CGSize?
+
+    /// Model download state.
+    @State private var modelStatus: SuperResolutionModelStatus = .notApplicable
+    @State private var isDownloading: Bool = false
+    @State private var downloadError: String?
 
     /// Common frame rate options.
     /// Note: Draw Things currently generates video at 16 FPS (model limitation).
@@ -53,13 +72,65 @@ public struct VideoConfigurationView: View {
         FrameInterpolator.isVTFrameProcessorAvailable
     }
 
+    /// Whether VT super resolution is available on this system.
+    private var isVTSuperResolutionAvailable: Bool {
+        SuperResolutionScaler.isVTSuperResolutionAvailable
+    }
+
+    /// Available super resolution factors based on frame dimensions and VT limits.
+    private var availableSuperResolutionFactors: [Int] {
+        guard let dims = frameDimensions else {
+            // No dimensions known, show common options
+            return [2, 3, 4]
+        }
+
+        let width = Int(dims.width)
+        let height = Int(dims.height)
+
+        // VT Super Resolution has max input of 1920x1080
+        // Filter factors where output would be reasonable and input is within limits
+        let maxVTWidth = 1920
+        let maxVTHeight = 1080
+
+        var factors: [Int] = []
+
+        for factor in [2, 3, 4] {
+            // Check if input dimensions work with VT (if available)
+            if isVTSuperResolutionAvailable {
+                // VT requires input <= 1920x1080
+                if width <= maxVTWidth && height <= maxVTHeight {
+                    factors.append(factor)
+                }
+            } else {
+                // Core Image Lanczos can handle any size, but let's be reasonable
+                // Limit to outputs under 8K (7680x4320)
+                let outputWidth = width * factor
+                let outputHeight = height * factor
+                if outputWidth <= 7680 && outputHeight <= 4320 {
+                    factors.append(factor)
+                }
+            }
+        }
+
+        // Always allow at least 2x via Core Image fallback
+        if factors.isEmpty {
+            factors = [2]
+        }
+
+        return factors
+    }
+
     public init(
         frameRate: Binding<Int>,
         codec: Binding<VideoCodec>,
         quality: Binding<VideoQuality>,
         interpolationEnabled: Binding<Bool>,
         interpolationFactor: Binding<Int>,
-        interpolationMethod: Binding<InterpolationMethod?>
+        interpolationMethod: Binding<InterpolationMethod?>,
+        superResolutionEnabled: Binding<Bool>,
+        superResolutionFactor: Binding<Int>,
+        superResolutionMethod: Binding<SuperResolutionMethod?>,
+        frameDimensions: CGSize? = nil
     ) {
         self._frameRate = frameRate
         self._codec = codec
@@ -67,6 +138,10 @@ public struct VideoConfigurationView: View {
         self._interpolationEnabled = interpolationEnabled
         self._interpolationFactor = interpolationFactor
         self._interpolationMethod = interpolationMethod
+        self._superResolutionEnabled = superResolutionEnabled
+        self._superResolutionFactor = superResolutionFactor
+        self._superResolutionMethod = superResolutionMethod
+        self.frameDimensions = frameDimensions
     }
 
     public var body: some View {
@@ -95,15 +170,22 @@ public struct VideoConfigurationView: View {
         }
 
         Section("Frame Interpolation") {
-            Toggle("Enable Interpolation (2x)", isOn: $interpolationEnabled)
+            Toggle("Enable Interpolation", isOn: $interpolationEnabled)
                 .help("Insert intermediate frames for smoother playback")
                 .onChange(of: interpolationEnabled) { _, enabled in
-                    if enabled {
+                    if enabled && interpolationFactor < 2 {
                         interpolationFactor = 2
                     }
                 }
 
             if interpolationEnabled {
+                Picker("Multiplier", selection: $interpolationFactor) {
+                    ForEach(interpolationFactors, id: \.self) { factor in
+                        Text("\(factor)x").tag(factor)
+                    }
+                }
+                .help("Number of intermediate frames to generate between each original frame")
+
                 if isVTFrameProcessorAvailable {
                     // User can choose between methods
                     Picker("Method", selection: methodBinding) {
@@ -123,17 +205,169 @@ public struct VideoConfigurationView: View {
                     .help("ML-based interpolation requires macOS 15.4 or later")
                 }
             }
+        }
 
-            // Multiplier picker - hidden for now, defaults to 2x
-            // Uncomment to allow user selection of interpolation factor
-            // if interpolationEnabled {
-            //     Picker("Multiplier", selection: $interpolationFactor) {
-            //         ForEach(interpolationFactors, id: \.self) { factor in
-            //             Text("\(factor)x").tag(factor)
-            //         }
-            //     }
-            //     .help("Number of frames to generate between each original frame")
-            // }
+        Section("Super Resolution") {
+            Toggle("Enable Upscaling", isOn: $superResolutionEnabled)
+                .help("Upscale video resolution using ML-based super resolution")
+                .onChange(of: superResolutionEnabled) { _, enabled in
+                    if enabled {
+                        // Set to first available factor
+                        if !availableSuperResolutionFactors.contains(superResolutionFactor) {
+                            superResolutionFactor = availableSuperResolutionFactors.first ?? 2
+                        }
+                        refreshModelStatus()
+                    }
+                }
+
+            if superResolutionEnabled {
+                Picker("Scale", selection: $superResolutionFactor) {
+                    ForEach(availableSuperResolutionFactors, id: \.self) { factor in
+                        scaleFactorLabel(factor).tag(factor)
+                    }
+                }
+                .help("Output resolution multiplier")
+                .onChange(of: superResolutionFactor) { _, _ in
+                    refreshModelStatus()
+                }
+
+                if isVTSuperResolutionAvailable {
+                    // User can choose between methods
+                    Picker("Method", selection: superResMethodBinding) {
+                        Text("Auto (ML-based)").tag(SuperResolutionMethod?.none)
+                        Text("ML Super Resolution").tag(SuperResolutionMethod?.some(.vtSuperResolution))
+                        Text("ML Low Latency").tag(SuperResolutionMethod?.some(.vtLowLatency))
+                        Text("Lanczos Scale").tag(SuperResolutionMethod?.some(.coreImageLanczos))
+                    }
+                    .help("ML-based upscaling provides better detail; Lanczos is faster but lower quality")
+                    .onChange(of: superResolutionMethod) { _, _ in
+                        refreshModelStatus()
+                    }
+
+                    // Model download status (only for ML Super Resolution)
+                    if shouldShowModelStatus {
+                        modelStatusView
+                    }
+                } else {
+                    // Only Core Image available
+                    HStack {
+                        Text("Method")
+                        Spacer()
+                        Text("Lanczos Scale")
+                            .foregroundColor(.secondary)
+                    }
+                    .help("ML-based super resolution requires macOS 26 or later")
+                }
+            }
+        }
+        .onAppear {
+            refreshModelStatus()
+        }
+    }
+
+    /// Creates a label for a scale factor, showing output dimensions if known.
+    @ViewBuilder
+    private func scaleFactorLabel(_ factor: Int) -> some View {
+        if let dims = frameDimensions {
+            let outWidth = Int(dims.width) * factor
+            let outHeight = Int(dims.height) * factor
+            Text("\(factor)x (\(outWidth)×\(outHeight))")
+        } else {
+            Text("\(factor)x")
+        }
+    }
+
+    /// Whether to show model status (only for ML Super Resolution method).
+    private var shouldShowModelStatus: Bool {
+        // Show for Auto (nil) or explicit vtSuperResolution
+        // Don't show for vtLowLatency or coreImageLanczos as they don't need model downloads
+        superResolutionMethod == nil || superResolutionMethod == .vtSuperResolution
+    }
+
+    /// View showing model download status.
+    @ViewBuilder
+    private var modelStatusView: some View {
+        switch modelStatus {
+        case .ready:
+            HStack {
+                Text("ML Models")
+                Spacer()
+                Label("Ready", systemImage: "checkmark.circle.fill")
+                    .foregroundColor(.green)
+                    .labelStyle(.titleAndIcon)
+            }
+
+        case .downloadRequired:
+            HStack {
+                Text("ML Models")
+                Spacer()
+                if isDownloading {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Downloading...")
+                        .foregroundColor(.secondary)
+                } else {
+                    Button("Download") {
+                        downloadModels()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+            if let error = downloadError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
+
+        case .downloading(let progress):
+            HStack {
+                Text("ML Models")
+                Spacer()
+                ProgressView(value: Double(progress))
+                    .frame(width: 80)
+                Text("\(Int(progress * 100))%")
+                    .foregroundColor(.secondary)
+                    .font(.caption)
+            }
+
+        case .notApplicable:
+            EmptyView()
+        }
+    }
+
+    /// Refreshes the model status.
+    private func refreshModelStatus() {
+        modelStatus = SuperResolutionScaler.modelStatus(
+            forWidth: 512,
+            height: 512,
+            scaleFactor: superResolutionFactor
+        )
+    }
+
+    /// Downloads the ML models.
+    private func downloadModels() {
+        isDownloading = true
+        downloadError = nil
+
+        Task {
+            do {
+                try await SuperResolutionScaler.downloadModels(
+                    forWidth: 512,
+                    height: 512,
+                    scaleFactor: superResolutionFactor
+                )
+                await MainActor.run {
+                    isDownloading = false
+                    refreshModelStatus()
+                }
+            } catch {
+                await MainActor.run {
+                    isDownloading = false
+                    downloadError = error.localizedDescription
+                    refreshModelStatus()
+                }
+            }
         }
     }
 
@@ -142,6 +376,14 @@ public struct VideoConfigurationView: View {
         Binding(
             get: { interpolationMethod },
             set: { interpolationMethod = $0 }
+        )
+    }
+
+    /// Binding helper for the optional SuperResolutionMethod picker.
+    private var superResMethodBinding: Binding<SuperResolutionMethod?> {
+        Binding(
+            get: { superResolutionMethod },
+            set: { superResolutionMethod = $0 }
         )
     }
 }
@@ -154,9 +396,12 @@ public struct VideoConfigurationView: View {
             quality: .constant(.high),
             interpolationEnabled: .constant(true),
             interpolationFactor: .constant(2),
-            interpolationMethod: .constant(nil)
+            interpolationMethod: .constant(nil),
+            superResolutionEnabled: .constant(true),
+            superResolutionFactor: .constant(2),
+            superResolutionMethod: .constant(nil)
         )
     }
     .formStyle(.grouped)
-    .frame(width: 400, height: 350)
+    .frame(width: 400, height: 450)
 }

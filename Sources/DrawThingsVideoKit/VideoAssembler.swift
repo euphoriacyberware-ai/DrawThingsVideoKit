@@ -23,6 +23,7 @@ public enum VideoAssemblerError: Error, LocalizedError {
     case failedToAppendFrame(Int)
     case failedToFinishWriting(Error?)
     case interpolationFailed(Error?)
+    case superResolutionFailed(Error?)
     case outputFileExists
     case invalidConfiguration(String)
 
@@ -48,6 +49,8 @@ public enum VideoAssemblerError: Error, LocalizedError {
             return "Failed to finish writing video: \(error?.localizedDescription ?? "unknown error")"
         case .interpolationFailed(let error):
             return "Frame interpolation failed: \(error?.localizedDescription ?? "unknown error")"
+        case .superResolutionFailed(let error):
+            return "Super resolution upscaling failed: \(error?.localizedDescription ?? "unknown error")"
         case .outputFileExists:
             return "Output file already exists and overwrite is disabled"
         case .invalidConfiguration(let message):
@@ -59,12 +62,13 @@ public enum VideoAssemblerError: Error, LocalizedError {
 /// Assembles video frames into a video file using AVFoundation.
 ///
 /// VideoAssembler handles the low-level details of creating video files from
-/// sequences of images, including codec selection, quality settings, and
-/// optional frame interpolation.
+/// sequences of images, including codec selection, quality settings,
+/// optional frame interpolation, and super resolution upscaling.
 ///
 /// On macOS 26+ and iOS 26+, frame interpolation uses Apple's VTFrameProcessor
-/// for high-quality motion-aware interpolation. On older systems, it falls back
-/// to Core Image dissolve transitions.
+/// for high-quality motion-aware interpolation, and super resolution uses
+/// VTSuperResolutionScaler for ML-based upscaling. On older systems, it falls
+/// back to Core Image-based processing.
 ///
 /// Example usage:
 /// ```swift
@@ -73,7 +77,8 @@ public enum VideoAssemblerError: Error, LocalizedError {
 /// let config = VideoConfiguration(
 ///     outputURL: outputURL,
 ///     frameRate: 24,
-///     interpolation: .enabled(factor: 2)
+///     interpolation: .enabled(factor: 2),
+///     superResolution: .enabled(factor: 2)
 /// )
 ///
 /// let outputURL = try await assembler.assemble(
@@ -87,16 +92,32 @@ public actor VideoAssembler {
     /// Frame interpolator instance.
     private let interpolator: FrameInterpolator
 
+    /// Super resolution scaler instance.
+    private let superResScaler: SuperResolutionScaler
+
     /// Creates a new video assembler.
-    /// - Parameter preferredInterpolationMethod: Optionally force a specific interpolation method.
-    public init(preferredInterpolationMethod: InterpolationMethod? = nil) {
+    /// - Parameters:
+    ///   - preferredInterpolationMethod: Optionally force a specific interpolation method.
+    ///   - preferredSuperResolutionMethod: Optionally force a specific super resolution method.
+    public init(
+        preferredInterpolationMethod: InterpolationMethod? = nil,
+        preferredSuperResolutionMethod: SuperResolutionMethod? = nil
+    ) {
         self.interpolator = FrameInterpolator(preferredMethod: preferredInterpolationMethod)
+        self.superResScaler = SuperResolutionScaler(preferredMethod: preferredSuperResolutionMethod)
     }
 
     /// The interpolation method that will be used.
     public var activeInterpolationMethod: InterpolationMethod {
         get async {
             await interpolator.activeMethod
+        }
+    }
+
+    /// The super resolution method that will be used.
+    public var activeSuperResolutionMethod: SuperResolutionMethod {
+        get async {
+            await superResScaler.activeMethod
         }
     }
 
@@ -133,26 +154,53 @@ public actor VideoAssembler {
             throw VideoAssemblerError.noFrames
         }
 
+        // Calculate progress segments
+        let hasInterpolation = configuration.interpolation.isEnabled
+        let hasSuperRes = configuration.superResolution.isEnabled
+        let totalSteps = (hasInterpolation ? 1 : 0) + (hasSuperRes ? 1 : 0) + 1 // +1 for video writing
+        var currentStep = 0
+
+        func stepProgress(_ p: Double) {
+            let stepSize = 1.0 / Double(totalSteps)
+            let base = Double(currentStep) * stepSize
+            progress?(base + p * stepSize)
+        }
+
+        var processedFrames = cgImages
+
+        // Apply super resolution if enabled (before interpolation for better quality)
+        if configuration.superResolution.isEnabled {
+            do {
+                processedFrames = try await superResScaler.upscale(
+                    frames: processedFrames,
+                    scaleFactor: configuration.superResolution.factor,
+                    progress: stepProgress
+                )
+            } catch let error as SuperResolutionError {
+                throw VideoAssemblerError.invalidConfiguration(error.localizedDescription)
+            }
+            currentStep += 1
+        }
+
         // Apply interpolation if enabled
-        let finalFrames: [CGImage]
         if configuration.interpolation.isEnabled {
-            finalFrames = try await interpolator.interpolate(
-                frames: cgImages,
-                factor: configuration.interpolation.factor,
-                progress: { p in progress?(p * 0.5) } // First 50% for interpolation
-            )
-        } else {
-            finalFrames = cgImages
+            do {
+                processedFrames = try await interpolator.interpolate(
+                    frames: processedFrames,
+                    factor: configuration.interpolation.factor,
+                    progress: stepProgress
+                )
+            } catch let error as FrameInterpolatorError {
+                throw VideoAssemblerError.interpolationFailed(error)
+            }
+            currentStep += 1
         }
 
         // Assemble video
         let outputURL = try await writeVideo(
-            frames: finalFrames,
+            frames: processedFrames,
             configuration: configuration,
-            progress: { p in
-                let base = configuration.interpolation.isEnabled ? 0.5 : 0.0
-                progress?(base + p * (1.0 - base))
-            }
+            progress: stepProgress
         )
 
         return outputURL
