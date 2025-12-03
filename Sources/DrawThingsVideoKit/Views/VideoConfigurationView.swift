@@ -273,10 +273,11 @@ public struct VideoConfigurationView: View {
 
                 if isVTSuperResolutionAvailable {
                     // User can choose between methods
+                    // Note: vtLowLatency is omitted as it's designed for real-time use cases
+                    // and produces poor results for offline video assembly
                     Picker("Method", selection: superResMethodBinding) {
                         Text("Auto (ML-based)").tag(SuperResolutionMethod?.none)
                         Text("ML Super Resolution").tag(SuperResolutionMethod?.some(.vtSuperResolution))
-                        Text("ML Low Latency").tag(SuperResolutionMethod?.some(.vtLowLatency))
                         Text("Lanczos Scale").tag(SuperResolutionMethod?.some(.coreImageLanczos))
                     }
                     .help("ML-based upscaling provides better detail; Lanczos is faster but lower quality")
