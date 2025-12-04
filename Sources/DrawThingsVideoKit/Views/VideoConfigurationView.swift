@@ -47,6 +47,7 @@ public struct VideoConfigurationView: View {
     @Binding var interpolationEnabled: Bool
     @Binding var interpolationFactor: Int
     @Binding var interpolationMethod: InterpolationMethod?
+    @Binding var interpolationPassMode: InterpolationPassMode
     @Binding var superResolutionEnabled: Bool
     @Binding var superResolutionFactor: Int
     @Binding var superResolutionMethod: SuperResolutionMethod?
@@ -155,6 +156,7 @@ public struct VideoConfigurationView: View {
         interpolationEnabled: Binding<Bool>,
         interpolationFactor: Binding<Int>,
         interpolationMethod: Binding<InterpolationMethod?>,
+        interpolationPassMode: Binding<InterpolationPassMode>,
         superResolutionEnabled: Binding<Bool>,
         superResolutionFactor: Binding<Int>,
         superResolutionMethod: Binding<SuperResolutionMethod?>,
@@ -166,6 +168,7 @@ public struct VideoConfigurationView: View {
         self._interpolationEnabled = interpolationEnabled
         self._interpolationFactor = interpolationFactor
         self._interpolationMethod = interpolationMethod
+        self._interpolationPassMode = interpolationPassMode
         self._superResolutionEnabled = superResolutionEnabled
         self._superResolutionFactor = superResolutionFactor
         self._superResolutionMethod = superResolutionMethod
@@ -234,6 +237,16 @@ public struct VideoConfigurationView: View {
                         Text("Cross Dissolve").tag(InterpolationMethod?.some(.coreImageDissolve))
                     }
                     .help("ML-based interpolation provides motion-aware results; Cross Dissolve is faster but lower quality")
+
+                    // Pass mode picker (only relevant for factors > 2)
+                    if interpolationFactor > 2 {
+                        Picker("Pass Mode", selection: $interpolationPassMode) {
+                            ForEach(InterpolationPassMode.allCases, id: \.self) { mode in
+                                Text(mode.displayName).tag(mode)
+                            }
+                        }
+                        .help("Multi-pass may reduce artifacts in fast motion scenes but takes longer")
+                    }
                 } else {
                     // Only Core Image available
                     HStack {
@@ -436,13 +449,14 @@ public struct VideoConfigurationView: View {
             codec: .constant(.h264),
             quality: .constant(.high),
             interpolationEnabled: .constant(true),
-            interpolationFactor: .constant(2),
+            interpolationFactor: .constant(4),
             interpolationMethod: .constant(nil),
+            interpolationPassMode: .constant(.singlePass),
             superResolutionEnabled: .constant(true),
             superResolutionFactor: .constant(2),
             superResolutionMethod: .constant(nil)
         )
     }
     .formStyle(.grouped)
-    .frame(width: 400, height: 450)
+    .frame(width: 400, height: 500)
 }

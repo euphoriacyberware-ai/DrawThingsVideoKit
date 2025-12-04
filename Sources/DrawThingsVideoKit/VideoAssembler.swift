@@ -188,6 +188,7 @@ public actor VideoAssembler {
                 processedFrames = try await interpolator.interpolate(
                     frames: processedFrames,
                     factor: configuration.interpolation.factor,
+                    passMode: configuration.interpolationPassMode,
                     progress: stepProgress
                 )
             } catch let error as FrameInterpolatorError {
