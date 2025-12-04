@@ -46,6 +46,9 @@ public struct VideoConfiguration: Sendable {
     /// Preferred interpolation method (nil = auto-select best available).
     public var interpolationMethod: InterpolationMethod?
 
+    /// Interpolation pass mode (single-pass vs multi-pass for factors > 2).
+    public var interpolationPassMode: InterpolationPassMode
+
     /// Super resolution settings.
     public var superResolution: SuperResolutionMode
 
@@ -68,6 +71,7 @@ public struct VideoConfiguration: Sendable {
     ///   - quality: Encoding quality preset (default: .high).
     ///   - interpolation: Frame interpolation mode (default: .disabled).
     ///   - interpolationMethod: Preferred interpolation method (default: nil for auto).
+    ///   - interpolationPassMode: Single-pass or multi-pass interpolation (default: .singlePass).
     ///   - superResolution: Super resolution mode (default: .disabled).
     ///   - superResolutionMethod: Preferred super resolution method (default: nil for auto).
     ///   - overwriteExisting: Whether to overwrite existing files (default: true).
@@ -80,6 +84,7 @@ public struct VideoConfiguration: Sendable {
         quality: VideoQuality = .high,
         interpolation: InterpolationMode = .disabled,
         interpolationMethod: InterpolationMethod? = nil,
+        interpolationPassMode: InterpolationPassMode = .singlePass,
         superResolution: SuperResolutionMode = .disabled,
         superResolutionMethod: SuperResolutionMethod? = nil,
         overwriteExisting: Bool = true,
@@ -92,6 +97,7 @@ public struct VideoConfiguration: Sendable {
         self.quality = quality
         self.interpolation = interpolation
         self.interpolationMethod = interpolationMethod
+        self.interpolationPassMode = interpolationPassMode
         self.superResolution = superResolution
         self.superResolutionMethod = superResolutionMethod
         self.overwriteExisting = overwriteExisting

@@ -54,8 +54,9 @@ let config = VideoConfiguration(
 - `quality: VideoQuality` - Encoding quality (.low, .medium, .high, .maximum)
 - `interpolation: InterpolationMode` - Frame interpolation (.disabled or .enabled(factor:))
 - `interpolationMethod: InterpolationMethod?` - Preferred method (.vtFrameProcessor or .coreImageDissolve)
+- `interpolationPassMode: InterpolationPassMode` - Single-pass or multi-pass interpolation (.singlePass or .multiPass)
 - `superResolution: SuperResolutionMode` - Upscaling (.disabled or .enabled(factor:))
-- `superResolutionMethod: SuperResolutionMethod?` - Preferred method (.vtSuperResolution, .vtLowLatency, or .coreImageLanczos)
+- `superResolutionMethod: SuperResolutionMethod?` - Preferred method (.vtSuperResolution or .coreImageLanczos)
 - `overwriteExisting: Bool` - Whether to overwrite existing files (default: true)
 - `audioURL: URL?` - Optional audio track (planned for future release)
 
@@ -200,6 +201,7 @@ SwiftUI view for configuring video output settings:
 @State private var interpolationEnabled: Bool = false
 @State private var interpolationFactor: Int = 2
 @State private var interpolationMethod: InterpolationMethod? = nil
+@State private var interpolationPassMode: InterpolationPassMode = .singlePass
 @State private var superResolutionEnabled: Bool = false
 @State private var superResolutionFactor: Int = 2
 @State private var superResolutionMethod: SuperResolutionMethod? = nil
@@ -211,6 +213,7 @@ VideoConfigurationView(
     interpolationEnabled: $interpolationEnabled,
     interpolationFactor: $interpolationFactor,
     interpolationMethod: $interpolationMethod,
+    interpolationPassMode: $interpolationPassMode,
     superResolutionEnabled: $superResolutionEnabled,
     superResolutionFactor: $superResolutionFactor,
     superResolutionMethod: $superResolutionMethod,
@@ -223,13 +226,14 @@ Provides controls for:
 - Quality preset (Low, Medium, High, Maximum)
 - Frame interpolation with target frame rate presets:
   - 24 fps - Cinematic
-  - 25 fps - PAL
-  - 30 fps - NTSC
-  - 48 fps - High Frame Rate
-  - 60 fps - High Motion
+  - 30 fps - Broadcast
+  - 32 fps - Smooth (same duration)
+  - 48 fps - High Frame Rate (same duration)
+  - 64 fps - Ultra Smooth (same duration)
 - Interpolation method selection (Auto, ML-based, Cross Dissolve)
+- Pass mode selection for 4x interpolation (Single Pass, Multi-Pass)
 - Super resolution upscaling (2x, 3x, 4x)
-- Super resolution method selection (Auto, ML Super Resolution, ML Low Latency, Lanczos)
+- Super resolution method selection (Auto, ML Super Resolution, Lanczos)
 - ML model download status and button
 
 ### VideoAssemblyProgressView
@@ -318,6 +322,37 @@ let config = VideoConfiguration(
 )
 ```
 
+### Multi-Pass Interpolation
+
+For 4x interpolation, you can choose between single-pass and multi-pass modes:
+
+**Single Pass** (default)
+- Generates 3 intermediate frames between each pair in one step
+- Faster processing
+- Works well for most content
+
+**Multi-Pass (2x → 2x)**
+- Runs two cascaded 2x interpolation passes
+- Each pass only predicts 1 frame between each pair
+- May reduce motion artifacts in fast-motion scenes
+- Takes approximately twice as long
+
+```swift
+let config = VideoConfiguration(
+    outputURL: outputURL,
+    frameRate: 64,  // 4x interpolation
+    interpolation: .enabled(factor: 4),
+    interpolationPassMode: .multiPass  // or .singlePass for default behavior
+)
+```
+
+Multi-pass mode is particularly useful when:
+- Processing AI-generated video with fast motion
+- Seeing ghosting or pre-echo artifacts in fast-moving scenes
+- Quality is more important than processing time
+
+Note: Multi-pass only applies to 4x interpolation. For 2x and 3x factors, the pass mode setting is ignored.
+
 ## Super Resolution
 
 DrawThingsVideoKit includes ML-based super resolution to upscale video output to higher resolutions.
@@ -330,11 +365,6 @@ DrawThingsVideoKit includes ML-based super resolution to upscale video output to
 - Maximum input: 1920x1080 for video, 1920x1920 for images
 - Requires one-time model download (~100-200 MB per scale factor)
 
-**ML Low Latency** (macOS 26+, iOS 26+)
-- Uses VTLowLatencySuperResolutionScaler
-- Faster processing with slightly less detail enhancement
-- Better for real-time or batch processing
-
 **Lanczos Scale** (All platforms)
 - Uses Core Image's Lanczos resampling
 - High-quality traditional upscaling
@@ -345,7 +375,7 @@ DrawThingsVideoKit includes ML-based super resolution to upscale video output to
 let config = VideoConfiguration(
     outputURL: outputURL,
     superResolution: .enabled(factor: 2),
-    superResolutionMethod: .vtSuperResolution  // or .vtLowLatency, .coreImageLanczos, or nil for auto
+    superResolutionMethod: .vtSuperResolution  // or .coreImageLanczos, or nil for auto
 )
 ```
 

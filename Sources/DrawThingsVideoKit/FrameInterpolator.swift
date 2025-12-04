@@ -49,6 +49,27 @@ public enum InterpolationMethod: String, Sendable {
     case coreImageDissolve
 }
 
+/// Mode for applying interpolation at higher factors.
+public enum InterpolationPassMode: String, Sendable, CaseIterable {
+    /// Single-pass interpolation at the requested factor.
+    /// Faster but may produce more artifacts with fast motion.
+    case singlePass
+
+    /// Multi-pass interpolation using cascaded 2x passes.
+    /// For 4x: runs 2x → 2x. Slower but may reduce artifacts.
+    case multiPass
+
+    /// Human-readable display name.
+    public var displayName: String {
+        switch self {
+        case .singlePass:
+            return "Single Pass"
+        case .multiPass:
+            return "Multi-Pass (2x→2x)"
+        }
+    }
+}
+
 /// Frame interpolator that uses VTFrameProcessor on macOS 26+ with Core Image fallback.
 ///
 /// On macOS 26+ and iOS 26+, this uses Apple's ML-based VTFrameRateConversion
@@ -111,12 +132,14 @@ public actor FrameInterpolator {
     /// - Parameters:
     ///   - frames: Array of CGImages to interpolate between.
     ///   - factor: Multiplication factor (2 = double frames, 4 = quadruple, etc.).
+    ///   - mode: Single-pass or multi-pass interpolation mode.
     ///   - progress: Optional progress callback (0.0 to 1.0).
     /// - Returns: Array of interpolated CGImages.
     /// - Throws: FrameInterpolatorError if interpolation fails.
     public func interpolate(
         frames: [CGImage],
         factor: Int,
+        passMode: InterpolationPassMode = .singlePass,
         progress: (@Sendable (Double) -> Void)? = nil
     ) async throws -> [CGImage] {
         guard frames.count >= 2 else {
@@ -127,6 +150,67 @@ public actor FrameInterpolator {
             throw FrameInterpolatorError.invalidFactor
         }
 
+        // Multi-pass mode: cascade 2x interpolations for factors > 2
+        if passMode == .multiPass && factor > 2 {
+            return try await interpolateMultiPass(
+                frames: frames,
+                factor: factor,
+                progress: progress
+            )
+        }
+
+        // Single-pass mode
+        return try await interpolateSinglePass(
+            frames: frames,
+            factor: factor,
+            progress: progress
+        )
+    }
+
+    /// Performs multi-pass interpolation by cascading 2x passes.
+    private func interpolateMultiPass(
+        frames: [CGImage],
+        factor: Int,
+        progress: (@Sendable (Double) -> Void)?
+    ) async throws -> [CGImage] {
+        // Calculate number of 2x passes needed
+        // factor 4 = 2 passes (2x → 2x)
+        // factor 3 = not a power of 2, do 2x then trim or use single pass
+        // For simplicity, we handle factor 4 as 2x→2x, factor 3 as 3x single pass
+
+        if factor == 4 {
+            // Two passes of 2x each
+            // First pass: progress 0.0 - 0.5
+            let firstPassFrames = try await interpolateSinglePass(
+                frames: frames,
+                factor: 2,
+                progress: { p in progress?(p * 0.5) }
+            )
+
+            // Second pass: progress 0.5 - 1.0
+            let secondPassFrames = try await interpolateSinglePass(
+                frames: firstPassFrames,
+                factor: 2,
+                progress: { p in progress?(0.5 + p * 0.5) }
+            )
+
+            return secondPassFrames
+        } else {
+            // For non-power-of-2 factors, fall back to single pass
+            return try await interpolateSinglePass(
+                frames: frames,
+                factor: factor,
+                progress: progress
+            )
+        }
+    }
+
+    /// Performs single-pass interpolation at the specified factor.
+    private func interpolateSinglePass(
+        frames: [CGImage],
+        factor: Int,
+        progress: (@Sendable (Double) -> Void)?
+    ) async throws -> [CGImage] {
         let method = activeMethod
 
         switch method {
