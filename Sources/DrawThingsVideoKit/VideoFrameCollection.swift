@@ -241,3 +241,372 @@ extension NSImage {
     }
 }
 #endif
+
+// MARK: - Frame Format
+
+/// Image format for saving video frames.
+public enum FrameFormat: String, Codable, Sendable {
+    /// PNG format (lossless, larger files).
+    case png
+    /// JPEG format with specified quality.
+    case jpeg
+
+    /// Default JPEG quality (0.9).
+    public static let defaultJPEGQuality: Double = 0.9
+}
+
+// MARK: - Persistence Errors
+
+/// Errors that can occur during frame collection persistence.
+public enum VideoFrameCollectionError: Error, LocalizedError {
+    case directoryCreationFailed(Error)
+    case manifestWriteFailed(Error)
+    case manifestReadFailed(Error)
+    case manifestNotFound
+    case invalidManifest(String)
+    case frameWriteFailed(index: Int, Error)
+    case frameReadFailed(filename: String)
+    case noFramesToSave
+    case unsupportedManifestVersion(Int)
+
+    public var errorDescription: String? {
+        switch self {
+        case .directoryCreationFailed(let error):
+            return "Failed to create directory: \(error.localizedDescription)"
+        case .manifestWriteFailed(let error):
+            return "Failed to write manifest: \(error.localizedDescription)"
+        case .manifestReadFailed(let error):
+            return "Failed to read manifest: \(error.localizedDescription)"
+        case .manifestNotFound:
+            return "Manifest file not found in directory"
+        case .invalidManifest(let reason):
+            return "Invalid manifest: \(reason)"
+        case .frameWriteFailed(let index, let error):
+            return "Failed to write frame \(index): \(error.localizedDescription)"
+        case .frameReadFailed(let filename):
+            return "Failed to read frame: \(filename)"
+        case .noFramesToSave:
+            return "No frames to save"
+        case .unsupportedManifestVersion(let version):
+            return "Unsupported manifest version: \(version)"
+        }
+    }
+}
+
+// MARK: - Manifest Structures
+
+/// The manifest file structure for a saved frame collection.
+private struct FrameCollectionManifest: Codable {
+    static let currentVersion = 1
+    static let filename = "manifest.json"
+
+    let version: Int
+    let frameCount: Int
+    let format: FrameFormat
+    let jpegQuality: Double?
+    let frames: [FrameEntry]
+    let metadata: MetadataEntry
+
+    struct FrameEntry: Codable {
+        let filename: String
+        let index: Int
+    }
+
+    struct MetadataEntry: Codable {
+        let sourceJobId: String?
+        let prompt: String?
+        let negativePrompt: String?
+        let model: String?
+        let seed: Int64?
+        let generatedAt: Date?
+        let custom: [String: String]?
+    }
+}
+
+// MARK: - Save/Load Extensions
+
+extension VideoFrameCollection {
+    /// Saves the frame collection to a directory.
+    ///
+    /// Creates a directory containing individual frame files and a manifest.json
+    /// that preserves the frame order and metadata.
+    ///
+    /// Example:
+    /// ```swift
+    /// let collection = VideoFrameCollection(cgImages: frames)
+    /// try await collection.save(to: outputDirectory)
+    ///
+    /// // With JPEG format and progress
+    /// try await collection.save(
+    ///     to: outputDirectory,
+    ///     format: .jpeg,
+    ///     jpegQuality: 0.85
+    /// ) { progress in
+    ///     print("Saving: \(Int(progress * 100))%")
+    /// }
+    /// ```
+    ///
+    /// - Parameters:
+    ///   - directory: The directory to save to. Will be created if it doesn't exist.
+    ///   - format: The image format to use (default: .png).
+    ///   - jpegQuality: JPEG quality if format is .jpeg (0.0-1.0, default: 0.9).
+    ///   - progress: Optional progress callback (0.0 to 1.0).
+    /// - Throws: `VideoFrameCollectionError` if saving fails.
+    public func save(
+        to directory: URL,
+        format: FrameFormat = .png,
+        jpegQuality: Double = FrameFormat.defaultJPEGQuality,
+        progress: (@Sendable (Double) -> Void)? = nil
+    ) async throws {
+        guard !isEmpty else {
+            throw VideoFrameCollectionError.noFramesToSave
+        }
+
+        // Create directory if needed
+        do {
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true
+            )
+        } catch {
+            throw VideoFrameCollectionError.directoryCreationFailed(error)
+        }
+
+        let fileExtension = format == .png ? "png" : "jpg"
+        var frameEntries: [FrameCollectionManifest.FrameEntry] = []
+
+        // Save each frame
+        for (index, frame) in frames.enumerated() {
+            let filename = String(format: "frame_%04d.\(fileExtension)", index)
+            let fileURL = directory.appendingPathComponent(filename)
+
+            guard let cgImage = frame.cgImage else {
+                throw VideoFrameCollectionError.frameWriteFailed(
+                    index: index,
+                    NSError(domain: "VideoFrameCollection", code: -1,
+                           userInfo: [NSLocalizedDescriptionKey: "Could not get CGImage"])
+                )
+            }
+
+            do {
+                try saveImage(cgImage, to: fileURL, format: format, quality: jpegQuality)
+            } catch {
+                throw VideoFrameCollectionError.frameWriteFailed(index: index, error)
+            }
+
+            frameEntries.append(FrameCollectionManifest.FrameEntry(
+                filename: filename,
+                index: index
+            ))
+
+            progress?(Double(index + 1) / Double(frames.count))
+        }
+
+        // Create and save manifest
+        let manifest = FrameCollectionManifest(
+            version: FrameCollectionManifest.currentVersion,
+            frameCount: frames.count,
+            format: format,
+            jpegQuality: format == .jpeg ? jpegQuality : nil,
+            frames: frameEntries,
+            metadata: FrameCollectionManifest.MetadataEntry(
+                sourceJobId: metadata.sourceJobId?.uuidString,
+                prompt: metadata.prompt,
+                negativePrompt: metadata.negativePrompt,
+                model: metadata.model,
+                seed: metadata.seed,
+                generatedAt: metadata.generatedAt,
+                custom: metadata.custom.isEmpty ? nil : metadata.custom
+            )
+        )
+
+        let manifestURL = directory.appendingPathComponent(FrameCollectionManifest.filename)
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            encoder.dateEncodingStrategy = .iso8601
+            let data = try encoder.encode(manifest)
+            try data.write(to: manifestURL)
+        } catch {
+            throw VideoFrameCollectionError.manifestWriteFailed(error)
+        }
+    }
+
+    /// Loads a frame collection from a previously saved directory.
+    ///
+    /// Reads the manifest.json and loads frames in the correct order.
+    ///
+    /// Example:
+    /// ```swift
+    /// let collection = try await VideoFrameCollection.load(from: savedDirectory)
+    /// print("Loaded \(collection.count) frames")
+    /// ```
+    ///
+    /// - Parameters:
+    ///   - directory: The directory containing the saved collection.
+    ///   - loadImagesImmediately: If true, loads all images into memory as CGImages.
+    ///     If false (default), stores URLs and loads on demand.
+    ///   - progress: Optional progress callback (0.0 to 1.0).
+    /// - Returns: The loaded frame collection.
+    /// - Throws: `VideoFrameCollectionError` if loading fails.
+    public static func load(
+        from directory: URL,
+        loadImagesImmediately: Bool = false,
+        progress: (@Sendable (Double) -> Void)? = nil
+    ) async throws -> VideoFrameCollection {
+        let manifestURL = directory.appendingPathComponent(FrameCollectionManifest.filename)
+
+        guard FileManager.default.fileExists(atPath: manifestURL.path) else {
+            throw VideoFrameCollectionError.manifestNotFound
+        }
+
+        // Read manifest
+        let manifest: FrameCollectionManifest
+        do {
+            let data = try Data(contentsOf: manifestURL)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            manifest = try decoder.decode(FrameCollectionManifest.self, from: data)
+        } catch {
+            throw VideoFrameCollectionError.manifestReadFailed(error)
+        }
+
+        // Version check
+        guard manifest.version <= FrameCollectionManifest.currentVersion else {
+            throw VideoFrameCollectionError.unsupportedManifestVersion(manifest.version)
+        }
+
+        // Sort frames by index to ensure correct order
+        let sortedFrames = manifest.frames.sorted { $0.index < $1.index }
+
+        // Load frames
+        var frames: [VideoFrame] = []
+        frames.reserveCapacity(sortedFrames.count)
+
+        for (progressIndex, entry) in sortedFrames.enumerated() {
+            let frameURL = directory.appendingPathComponent(entry.filename)
+
+            guard FileManager.default.fileExists(atPath: frameURL.path) else {
+                throw VideoFrameCollectionError.frameReadFailed(filename: entry.filename)
+            }
+
+            if loadImagesImmediately {
+                // Load CGImage immediately
+                guard let source = CGImageSourceCreateWithURL(frameURL as CFURL, nil),
+                      let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+                    throw VideoFrameCollectionError.frameReadFailed(filename: entry.filename)
+                }
+                frames.append(.cgImage(cgImage))
+            } else {
+                // Store URL for lazy loading
+                frames.append(.url(frameURL))
+            }
+
+            progress?(Double(progressIndex + 1) / Double(sortedFrames.count))
+        }
+
+        // Reconstruct metadata
+        let metadata = VideoFrameMetadata(
+            sourceJobId: manifest.metadata.sourceJobId.flatMap { UUID(uuidString: $0) },
+            prompt: manifest.metadata.prompt,
+            negativePrompt: manifest.metadata.negativePrompt,
+            model: manifest.metadata.model,
+            seed: manifest.metadata.seed,
+            generatedAt: manifest.metadata.generatedAt,
+            custom: manifest.metadata.custom ?? [:]
+        )
+
+        var collection = VideoFrameCollection()
+        collection.frames = frames
+        collection.metadata = metadata
+        return collection
+    }
+
+    /// Checks if a directory contains a valid saved frame collection.
+    ///
+    /// - Parameter directory: The directory to check.
+    /// - Returns: True if the directory contains a valid manifest.
+    public static func exists(at directory: URL) -> Bool {
+        let manifestURL = directory.appendingPathComponent(FrameCollectionManifest.filename)
+        return FileManager.default.fileExists(atPath: manifestURL.path)
+    }
+
+    /// Returns information about a saved collection without fully loading it.
+    ///
+    /// - Parameter directory: The directory containing the saved collection.
+    /// - Returns: A tuple with frame count and metadata.
+    /// - Throws: `VideoFrameCollectionError` if reading fails.
+    public static func info(from directory: URL) async throws -> (frameCount: Int, metadata: VideoFrameMetadata) {
+        let manifestURL = directory.appendingPathComponent(FrameCollectionManifest.filename)
+
+        guard FileManager.default.fileExists(atPath: manifestURL.path) else {
+            throw VideoFrameCollectionError.manifestNotFound
+        }
+
+        let manifest: FrameCollectionManifest
+        do {
+            let data = try Data(contentsOf: manifestURL)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            manifest = try decoder.decode(FrameCollectionManifest.self, from: data)
+        } catch {
+            throw VideoFrameCollectionError.manifestReadFailed(error)
+        }
+
+        let metadata = VideoFrameMetadata(
+            sourceJobId: manifest.metadata.sourceJobId.flatMap { UUID(uuidString: $0) },
+            prompt: manifest.metadata.prompt,
+            negativePrompt: manifest.metadata.negativePrompt,
+            model: manifest.metadata.model,
+            seed: manifest.metadata.seed,
+            generatedAt: manifest.metadata.generatedAt,
+            custom: manifest.metadata.custom ?? [:]
+        )
+
+        return (manifest.frameCount, metadata)
+    }
+
+    // MARK: - Private Helpers
+
+    /// Saves a CGImage to a file.
+    private func saveImage(
+        _ image: CGImage,
+        to url: URL,
+        format: FrameFormat,
+        quality: Double
+    ) throws {
+        let uti: CFString
+        var properties: [CFString: Any] = [:]
+
+        switch format {
+        case .png:
+            uti = "public.png" as CFString
+        case .jpeg:
+            uti = "public.jpeg" as CFString
+            properties[kCGImageDestinationLossyCompressionQuality] = quality
+        }
+
+        guard let destination = CGImageDestinationCreateWithURL(
+            url as CFURL,
+            uti,
+            1,
+            nil
+        ) else {
+            throw NSError(
+                domain: "VideoFrameCollection",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to create image destination"]
+            )
+        }
+
+        CGImageDestinationAddImage(destination, image, properties as CFDictionary)
+
+        guard CGImageDestinationFinalize(destination) else {
+            throw NSError(
+                domain: "VideoFrameCollection",
+                code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to finalize image"]
+            )
+        }
+    }
+}

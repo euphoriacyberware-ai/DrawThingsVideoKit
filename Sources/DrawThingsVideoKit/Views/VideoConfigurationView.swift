@@ -106,7 +106,11 @@ public struct VideoConfigurationView: View {
         SuperResolutionScaler.isVTSuperResolutionAvailable
     }
 
-    /// Available super resolution factors based on frame dimensions and VT limits.
+    /// VT Super Resolution only supports 4x scaling.
+    /// 2x and 3x will use Core Image Lanczos fallback.
+    private let vtSupportedScaleFactors: Set<Int> = [4]
+
+    /// Available super resolution factors based on frame dimensions.
     private var availableSuperResolutionFactors: [Int] {
         guard let dims = frameDimensions else {
             // No dimensions known, show common options
@@ -116,26 +120,28 @@ public struct VideoConfigurationView: View {
         let width = Int(dims.width)
         let height = Int(dims.height)
 
-        // VT Super Resolution has max input of 1920x1080
-        // Filter factors where output would be reasonable and input is within limits
+        // VT Super Resolution has max input of 1920x1080 for video
         let maxVTWidth = 1920
         let maxVTHeight = 1080
 
         var factors: [Int] = []
 
         for factor in [2, 3, 4] {
-            // Check if input dimensions work with VT (if available)
-            if isVTSuperResolutionAvailable {
-                // VT requires input <= 1920x1080
-                if width <= maxVTWidth && height <= maxVTHeight {
-                    factors.append(factor)
-                }
-            } else {
-                // Core Image Lanczos can handle any size, but let's be reasonable
-                // Limit to outputs under 8K (7680x4320)
-                let outputWidth = width * factor
-                let outputHeight = height * factor
-                if outputWidth <= 7680 && outputHeight <= 4320 {
+            // Core Image Lanczos can handle any size, but let's be reasonable
+            // Limit to outputs under 8K (7680x4320)
+            let outputWidth = width * factor
+            let outputHeight = height * factor
+            if outputWidth <= 7680 && outputHeight <= 4320 {
+                // For VT-supported factors (4x), also check input dimension limits
+                if vtSupportedScaleFactors.contains(factor) && isVTSuperResolutionAvailable {
+                    // VT requires input <= 1920x1080 for video
+                    if width > maxVTWidth || height > maxVTHeight {
+                        // VT won't work, but Lanczos will - still allow it
+                        factors.append(factor)
+                    } else {
+                        factors.append(factor)
+                    }
+                } else {
                     factors.append(factor)
                 }
             }
@@ -147,6 +153,25 @@ public struct VideoConfigurationView: View {
         }
 
         return factors
+    }
+
+    /// Returns true if the given scale factor will use ML super resolution.
+    /// VT Super Resolution only supports 4x; 2x and 3x use Lanczos.
+    private func willUseMLSuperResolution(for factor: Int) -> Bool {
+        guard isVTSuperResolutionAvailable else { return false }
+        guard vtSupportedScaleFactors.contains(factor) else { return false }
+
+        // Check if user explicitly selected Lanczos
+        if superResolutionMethod == .coreImageLanczos { return false }
+
+        // Check dimension limits for VT (1920x1080 for video)
+        if let dims = frameDimensions {
+            if Int(dims.width) > 1920 || Int(dims.height) > 1080 {
+                return false
+            }
+        }
+
+        return true
     }
 
     public init(
@@ -319,23 +344,30 @@ public struct VideoConfigurationView: View {
         }
     }
 
-    /// Creates a label for a scale factor, showing output dimensions if known.
+    /// Creates a label for a scale factor, showing output dimensions and method indicator.
     @ViewBuilder
     private func scaleFactorLabel(_ factor: Int) -> some View {
+        let usesML = willUseMLSuperResolution(for: factor)
+        let methodIndicator = isVTSuperResolutionAvailable ? (usesML ? " - ML" : " - Lanczos") : ""
+
         if let dims = frameDimensions {
             let outWidth = Int(dims.width) * factor
             let outHeight = Int(dims.height) * factor
-            Text("\(factor)x (\(outWidth)×\(outHeight))")
+            Text("\(factor)x (\(outWidth)×\(outHeight))\(methodIndicator)")
         } else {
-            Text("\(factor)x")
+            Text("\(factor)x\(methodIndicator)")
         }
     }
 
-    /// Whether to show model status (only for ML Super Resolution method).
+    /// Whether to show model status (only when ML Super Resolution will actually be used).
     private var shouldShowModelStatus: Bool {
+        // Only show if ML will actually be used for the current scale factor
+        // VT Super Resolution only supports 4x; 2x and 3x always use Lanczos
+        guard willUseMLSuperResolution(for: superResolutionFactor) else { return false }
+
         // Show for Auto (nil) or explicit vtSuperResolution
-        // Don't show for vtLowLatency or coreImageLanczos as they don't need model downloads
-        superResolutionMethod == nil || superResolutionMethod == .vtSuperResolution
+        // Don't show for coreImageLanczos as it doesn't need model downloads
+        return superResolutionMethod == nil || superResolutionMethod == .vtSuperResolution
     }
 
     /// View showing model download status.
