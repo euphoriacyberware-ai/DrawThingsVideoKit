@@ -258,6 +258,13 @@ public final class VideoProcessor: ObservableObject {
         collectedFrames.remove(at: indices)
     }
 
+    /// Replace all collected frames with a new collection.
+    ///
+    /// - Parameter collection: The new frame collection.
+    public func replaceFrames(with collection: VideoFrameCollection) {
+        collectedFrames = collection
+    }
+
     // MARK: - Manual Assembly
 
     /// Assemble collected frames into a video.

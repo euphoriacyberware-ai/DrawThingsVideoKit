@@ -7,6 +7,7 @@
 
 import SwiftUI
 import CoreGraphics
+import UniformTypeIdentifiers
 
 #if canImport(AppKit)
 import AppKit
@@ -41,22 +42,33 @@ public struct VideoFrameCollectionView: View {
     let frames: VideoFrameCollection
     var onRemove: ((IndexSet) -> Void)?
     var onReprocess: (() -> Void)?
+    var onSave: ((URL) async throws -> Void)?
+    var onLoad: ((URL) async throws -> VideoFrameCollection)?
     var thumbnailSize: CGFloat
     var isReprocessing: Bool
 
     @State private var selectedIndices: Set<Int> = []
+    @State private var showingSavePanel: Bool = false
+    @State private var showingLoadPanel: Bool = false
+    @State private var isSaving: Bool = false
+    @State private var isLoading: Bool = false
+    @State private var errorMessage: String?
 
     public init(
         frames: VideoFrameCollection,
         thumbnailSize: CGFloat = 80,
         onRemove: ((IndexSet) -> Void)? = nil,
         onReprocess: (() -> Void)? = nil,
+        onSave: ((URL) async throws -> Void)? = nil,
+        onLoad: ((URL) async throws -> VideoFrameCollection)? = nil,
         isReprocessing: Bool = false
     ) {
         self.frames = frames
         self.thumbnailSize = thumbnailSize
         self.onRemove = onRemove
         self.onReprocess = onReprocess
+        self.onSave = onSave
+        self.onLoad = onLoad
         self.isReprocessing = isReprocessing
     }
 
@@ -121,6 +133,131 @@ public struct VideoFrameCollectionView: View {
             } else {
                 frameGrid
             }
+
+            // Save/Load buttons
+            if onSave != nil || onLoad != nil {
+                saveLoadButtons
+            }
+
+            // Error message
+            if let errorMessage = errorMessage {
+                Text(errorMessage)
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
+        }
+        .fileImporter(
+            isPresented: $showingLoadPanel,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
+        ) { result in
+            handleLoadResult(result)
+        }
+        .fileExporter(
+            isPresented: $showingSavePanel,
+            document: FrameCollectionDocument(),
+            contentType: .folder,
+            defaultFilename: "VideoFrames"
+        ) { result in
+            handleSaveResult(result)
+        }
+    }
+
+    // MARK: - Save/Load Buttons
+
+    private var saveLoadButtons: some View {
+        HStack(spacing: 8) {
+            if let _ = onLoad {
+                Button {
+                    showingLoadPanel = true
+                } label: {
+                    if isLoading {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Label("Load Frames", systemImage: "folder")
+                            .labelStyle(.titleAndIcon)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(isLoading || isSaving)
+                .help("Load frames from a saved collection")
+            }
+
+            if let _ = onSave, !frames.isEmpty {
+                Button {
+                    showingSavePanel = true
+                } label: {
+                    if isSaving {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Label("Save Frames", systemImage: "square.and.arrow.down")
+                            .labelStyle(.titleAndIcon)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(isLoading || isSaving)
+                .help("Save frames to disk for later use")
+            }
+
+            Spacer()
+        }
+    }
+
+    // MARK: - File Handling
+
+    private func handleSaveResult(_ result: Result<URL, Error>) {
+        switch result {
+        case .success(let url):
+            guard let onSave = onSave else { return }
+            isSaving = true
+            errorMessage = nil
+            Task {
+                do {
+                    try await onSave(url)
+                    await MainActor.run {
+                        isSaving = false
+                    }
+                } catch {
+                    await MainActor.run {
+                        isSaving = false
+                        errorMessage = "Save failed: \(error.localizedDescription)"
+                    }
+                }
+            }
+        case .failure(let error):
+            if (error as NSError).code != NSUserCancelledError {
+                errorMessage = "Save failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func handleLoadResult(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            guard let url = urls.first, let onLoad = onLoad else { return }
+            isLoading = true
+            errorMessage = nil
+            Task {
+                do {
+                    _ = try await onLoad(url)
+                    await MainActor.run {
+                        isLoading = false
+                    }
+                } catch {
+                    await MainActor.run {
+                        isLoading = false
+                        errorMessage = "Load failed: \(error.localizedDescription)"
+                    }
+                }
+            }
+        case .failure(let error):
+            if (error as NSError).code != NSUserCancelledError {
+                errorMessage = "Load failed: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -168,6 +305,25 @@ public struct VideoFrameCollectionView: View {
         } else {
             selectedIndices.insert(index)
         }
+    }
+}
+
+// MARK: - File Document for Export
+
+/// A placeholder document for the file exporter to create a folder.
+/// The actual saving is handled by the onSave callback.
+struct FrameCollectionDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.folder] }
+
+    init() {}
+
+    init(configuration: ReadConfiguration) throws {
+        // Not used for reading
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        // Return an empty directory wrapper - actual content is written by onSave
+        return FileWrapper(directoryWithFileWrappers: [:])
     }
 }
 
