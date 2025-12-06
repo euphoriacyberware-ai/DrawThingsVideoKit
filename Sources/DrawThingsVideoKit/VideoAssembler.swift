@@ -2,7 +2,11 @@
 //  VideoAssembler.swift
 //  DrawThingsVideoKit
 //
-//  Low-level video assembly from frames using AVFoundation.
+//  Created by euphoriacyberware-ai.
+//  Copyright © 2025 euphoriacyberware-ai
+//
+//  Licensed under the MIT License.
+//  See LICENSE file in the project root for license information.
 //
 
 import Foundation

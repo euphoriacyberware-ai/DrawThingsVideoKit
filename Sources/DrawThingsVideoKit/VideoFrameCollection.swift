@@ -2,7 +2,11 @@
 //  VideoFrameCollection.swift
 //  DrawThingsVideoKit
 //
-//  Standardized container for video frames.
+//  Created by euphoriacyberware-ai.
+//  Copyright © 2025 euphoriacyberware-ai
+//
+//  Licensed under the MIT License.
+//  See LICENSE file in the project root for license information.
 //
 
 import Foundation

@@ -2,7 +2,11 @@
 //  VideoFrameCollectionView.swift
 //  DrawThingsVideoKit
 //
-//  SwiftUI view for displaying and managing collected video frames.
+//  Created by euphoriacyberware-ai.
+//  Copyright © 2025 euphoriacyberware-ai
+//
+//  Licensed under the MIT License.
+//  See LICENSE file in the project root for license information.
 //
 
 import SwiftUI
@@ -169,7 +173,11 @@ public struct VideoFrameCollectionView: View {
         HStack(spacing: 8) {
             if let _ = onLoad {
                 Button {
+                    #if os(macOS)
+                    openLoadPanel()
+                    #else
                     showingLoadPanel = true
+                    #endif
                 } label: {
                     if isLoading {
                         ProgressView()
@@ -187,7 +195,11 @@ public struct VideoFrameCollectionView: View {
 
             if let _ = onSave, !frames.isEmpty {
                 Button {
+                    #if os(macOS)
+                    openSavePanel()
+                    #else
                     showingSavePanel = true
+                    #endif
                 } label: {
                     if isSaving {
                         ProgressView()
@@ -206,6 +218,39 @@ public struct VideoFrameCollectionView: View {
             Spacer()
         }
     }
+
+    // MARK: - macOS Panel Helpers
+
+    #if os(macOS)
+    private func openLoadPanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "Select a folder containing saved video frames"
+        panel.prompt = "Load"
+
+        panel.begin { response in
+            if response == .OK, let url = panel.url {
+                handleLoadResult(.success([url]))
+            }
+        }
+    }
+
+    private func openSavePanel() {
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = "VideoFrames"
+        panel.message = "Choose where to save video frames"
+        panel.prompt = "Save"
+
+        panel.begin { response in
+            if response == .OK, let url = panel.url {
+                handleSaveResult(.success(url))
+            }
+        }
+    }
+    #endif
 
     // MARK: - File Handling
 

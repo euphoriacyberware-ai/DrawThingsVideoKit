@@ -2,50 +2,11 @@
 //  DrawThingsVideoKit.swift
 //  DrawThingsVideoKit
 //
-//  Public API for video assembly from DrawThingsKit.
+//  Created by euphoriacyberware-ai.
+//  Copyright © 2025 euphoriacyberware-ai
 //
-//  DrawThingsVideoKit extends DrawThingsKit with video assembly capabilities,
-//  allowing you to create videos from generated image sequences.
-//
-//  Key Components:
-//  - VideoConfiguration: Settings for video output (codec, quality, frame rate)
-//  - VideoFrameCollection: Standardized container for video frames
-//  - VideoAssembler: Low-level frame-to-video assembly
-//  - VideoProcessor: High-level coordinator with JobQueue integration
-//
-//  Example usage:
-//  ```swift
-//  import DrawThingsKit
-//  import DrawThingsVideoKit
-//
-//  // Create a video processor
-//  let outputURL = FileManager.default.temporaryDirectory
-//      .appendingPathComponent("output.mp4")
-//
-//  let videoConfig = VideoConfiguration(
-//      outputURL: outputURL,
-//      frameRate: 24,
-//      interpolation: .enabled(factor: 2)
-//  )
-//
-//  let processor = VideoProcessor(
-//      configuration: VideoProcessorConfiguration(
-//          autoAssemble: true,
-//          minimumFrames: 10,
-//          defaultVideoConfiguration: videoConfig
-//      )
-//  )
-//
-//  // Connect to job queue for automatic assembly
-//  processor.connect(to: queue)
-//
-//  // Or manually assemble frames
-//  let frames = VideoFrameCollection(urls: imageURLs)
-//  let outputURL = try await processor.assemble(
-//      frames: frames,
-//      configuration: videoConfig
-//  )
-//  ```
+//  Licensed under the MIT License.
+//  See LICENSE file in the project root for license information.
 //
 
 import Foundation
