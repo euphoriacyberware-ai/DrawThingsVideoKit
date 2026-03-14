@@ -65,6 +65,10 @@ public struct VideoConfiguration: Sendable {
     /// Optional audio track to include in the output.
     public var audioURL: URL?
 
+    /// Optional audio data (WAV) to mux into the output video.
+    /// Takes precedence over `audioURL` when both are set.
+    public var audioData: Data?
+
     /// Creates a new video configuration.
     ///
     /// - Parameters:
@@ -80,6 +84,7 @@ public struct VideoConfiguration: Sendable {
     ///   - superResolutionMethod: Preferred super resolution method (default: nil for auto).
     ///   - overwriteExisting: Whether to overwrite existing files (default: true).
     ///   - audioURL: Optional audio track URL.
+    ///   - audioData: Optional audio data (WAV) to mux into the output.
     public init(
         outputURL: URL,
         sourceFrameRate: Int = 16,
@@ -92,7 +97,8 @@ public struct VideoConfiguration: Sendable {
         superResolution: SuperResolutionMode = .disabled,
         superResolutionMethod: SuperResolutionMethod? = nil,
         overwriteExisting: Bool = true,
-        audioURL: URL? = nil
+        audioURL: URL? = nil,
+        audioData: Data? = nil
     ) {
         self.outputURL = outputURL
         self.sourceFrameRate = sourceFrameRate
@@ -106,6 +112,7 @@ public struct VideoConfiguration: Sendable {
         self.superResolutionMethod = superResolutionMethod
         self.overwriteExisting = overwriteExisting
         self.audioURL = audioURL
+        self.audioData = audioData
     }
 }
 

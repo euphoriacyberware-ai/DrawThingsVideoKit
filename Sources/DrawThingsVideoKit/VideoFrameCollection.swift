@@ -46,6 +46,9 @@ public struct VideoFrameCollection: Sendable {
     /// Metadata associated with this collection.
     public var metadata: VideoFrameMetadata
 
+    /// Optional audio data (WAV format) associated with these frames.
+    public var audioData: [Data]?
+
     /// The number of frames in the collection.
     public var count: Int { frames.count }
 
@@ -113,11 +116,19 @@ public struct VideoFrameCollection: Sendable {
     /// Appends all frames from another collection.
     public mutating func append(contentsOf other: VideoFrameCollection) {
         frames.append(contentsOf: other.frames)
+        if let otherAudio = other.audioData, !otherAudio.isEmpty {
+            if audioData != nil {
+                audioData!.append(contentsOf: otherAudio)
+            } else {
+                audioData = otherAudio
+            }
+        }
     }
 
     /// Removes all frames from the collection.
     public mutating func removeAll() {
         frames.removeAll()
+        audioData = nil
     }
 
     /// Removes frames at the specified indices.
@@ -301,7 +312,7 @@ public enum VideoFrameCollectionError: Error, LocalizedError {
 
 /// The manifest file structure for a saved frame collection.
 private struct FrameCollectionManifest: Codable {
-    static let currentVersion = 1
+    static let currentVersion = 2
     static let filename = "manifest.json"
 
     let version: Int
@@ -310,8 +321,14 @@ private struct FrameCollectionManifest: Codable {
     let jpegQuality: Double?
     let frames: [FrameEntry]
     let metadata: MetadataEntry
+    let audio: [AudioEntry]?
 
     struct FrameEntry: Codable {
+        let filename: String
+        let index: Int
+    }
+
+    struct AudioEntry: Codable {
         let filename: String
         let index: Int
     }
@@ -406,6 +423,19 @@ extension VideoFrameCollection {
             progress?(Double(index + 1) / Double(frames.count))
         }
 
+        // Save audio files if present
+        var audioEntries: [FrameCollectionManifest.AudioEntry]? = nil
+        if let audioDataArray = audioData, !audioDataArray.isEmpty {
+            var entries: [FrameCollectionManifest.AudioEntry] = []
+            for (index, wavData) in audioDataArray.enumerated() {
+                let filename = String(format: "audio_%04d.wav", index)
+                let fileURL = directory.appendingPathComponent(filename)
+                try wavData.write(to: fileURL)
+                entries.append(FrameCollectionManifest.AudioEntry(filename: filename, index: index))
+            }
+            audioEntries = entries
+        }
+
         // Create and save manifest
         let manifest = FrameCollectionManifest(
             version: FrameCollectionManifest.currentVersion,
@@ -421,7 +451,8 @@ extension VideoFrameCollection {
                 seed: metadata.seed,
                 generatedAt: metadata.generatedAt,
                 custom: metadata.custom.isEmpty ? nil : metadata.custom
-            )
+            ),
+            audio: audioEntries
         )
 
         let manifestURL = directory.appendingPathComponent(FrameCollectionManifest.filename)
@@ -520,9 +551,27 @@ extension VideoFrameCollection {
             custom: manifest.metadata.custom ?? [:]
         )
 
+        // Load audio files if present
+        var loadedAudio: [Data]? = nil
+        if let audioEntries = manifest.audio, !audioEntries.isEmpty {
+            let sortedAudio = audioEntries.sorted { $0.index < $1.index }
+            var audioArray: [Data] = []
+            for entry in sortedAudio {
+                let audioURL = directory.appendingPathComponent(entry.filename)
+                if FileManager.default.fileExists(atPath: audioURL.path) {
+                    let wavData = try Data(contentsOf: audioURL)
+                    audioArray.append(wavData)
+                }
+            }
+            if !audioArray.isEmpty {
+                loadedAudio = audioArray
+            }
+        }
+
         var collection = VideoFrameCollection()
         collection.frames = frames
         collection.metadata = metadata
+        collection.audioData = loadedAudio
         return collection
     }
 

@@ -30,6 +30,7 @@ public enum VideoAssemblerError: Error, LocalizedError {
     case superResolutionFailed(Error?)
     case outputFileExists
     case invalidConfiguration(String)
+    case audioMuxingFailed(Error?)
 
     public var errorDescription: String? {
         switch self {
@@ -59,6 +60,8 @@ public enum VideoAssemblerError: Error, LocalizedError {
             return "Output file already exists and overwrite is disabled"
         case .invalidConfiguration(let message):
             return "Invalid configuration: \(message)"
+        case .audioMuxingFailed(let error):
+            return "Audio muxing failed: \(error?.localizedDescription ?? "unknown error")"
         }
     }
 }
@@ -233,6 +236,42 @@ public actor VideoAssembler {
             }
         }
 
+        // Resolve audio source before setting up the writer
+        let audioSourceURL = resolveAudioSource(configuration: configuration)
+        var audioAssetReader: AVAssetReader? = nil
+        var audioReaderOutput: AVAssetReaderTrackOutput? = nil
+
+        // Pre-load audio asset if available (needed to add input before startWriting)
+        if let audioURL = audioSourceURL {
+            do {
+                let audioAsset = AVURLAsset(url: audioURL)
+                guard let audioTrack = try await audioAsset.loadTracks(withMediaType: .audio).first else {
+                    throw VideoAssemblerError.audioMuxingFailed(nil)
+                }
+
+                let readerOutputSettings: [String: Any] = [
+                    AVFormatIDKey: kAudioFormatLinearPCM,
+                    AVLinearPCMBitDepthKey: 16,
+                    AVLinearPCMIsFloatKey: false,
+                    AVLinearPCMIsBigEndianKey: false,
+                    AVLinearPCMIsNonInterleaved: false
+                ]
+
+                let reader = try AVAssetReader(asset: audioAsset)
+                let output = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: readerOutputSettings)
+                guard reader.canAdd(output) else {
+                    throw VideoAssemblerError.audioMuxingFailed(nil)
+                }
+                reader.add(output)
+                audioAssetReader = reader
+                audioReaderOutput = output
+            } catch let error as VideoAssemblerError {
+                throw error
+            } catch {
+                throw VideoAssemblerError.audioMuxingFailed(error)
+            }
+        }
+
         // Create asset writer
         let writer: AVAssetWriter
         do {
@@ -258,6 +297,26 @@ public actor VideoAssembler {
             throw VideoAssemblerError.failedToCreateWriterInput
         }
         writer.add(writerInput)
+
+        // Add audio writer input before starting (must be added before startWriting)
+        var audioWriterInput: AVAssetWriterInput? = nil
+        if audioAssetReader != nil {
+            let audioOutputSettings: [String: Any] = [
+                AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVSampleRateKey: 44100,
+                AVNumberOfChannelsKey: 2,
+                AVEncoderBitRateKey: 128000
+            ]
+
+            let audioInput = AVAssetWriterInput(mediaType: .audio, outputSettings: audioOutputSettings)
+            audioInput.expectsMediaDataInRealTime = false
+
+            guard writer.canAdd(audioInput) else {
+                throw VideoAssemblerError.audioMuxingFailed(nil)
+            }
+            writer.add(audioInput)
+            audioWriterInput = audioInput
+        }
 
         // Create pixel buffer adaptor
         let sourcePixelBufferAttributes: [String: Any] = [
@@ -301,10 +360,32 @@ public actor VideoAssembler {
             progress?(Double(index + 1) / Double(frames.count))
         }
 
-        // Finish writing
         writerInput.markAsFinished()
 
+        // Write audio samples after video frames
+        if let audioInput = audioWriterInput,
+           let reader = audioAssetReader,
+           let readerOutput = audioReaderOutput {
+            guard reader.startReading() else {
+                throw VideoAssemblerError.audioMuxingFailed(reader.error)
+            }
+
+            while let sampleBuffer = readerOutput.copyNextSampleBuffer() {
+                while !audioInput.isReadyForMoreMediaData {
+                    try await Task.sleep(nanoseconds: 10_000_000)
+                }
+                audioInput.append(sampleBuffer)
+            }
+
+            audioInput.markAsFinished()
+        }
+
         await writer.finishWriting()
+
+        // Clean up temp audio file if we created one from audioData
+        if configuration.audioData != nil, let tempURL = audioSourceURL {
+            try? FileManager.default.removeItem(at: tempURL)
+        }
 
         if let error = writer.error {
             throw VideoAssemblerError.failedToFinishWriting(error)
@@ -366,5 +447,25 @@ public actor VideoAssembler {
         var cgImage: CGImage?
         VTCreateCGImageFromCVPixelBuffer(pixelBuffer, options: nil, imageOut: &cgImage)
         return cgImage
+    }
+
+    // MARK: - Audio Helpers
+
+    /// Resolves the audio source URL from configuration.
+    /// `audioData` takes precedence over `audioURL`. If `audioData` is set,
+    /// writes it to a temp file and returns that URL.
+    private func resolveAudioSource(configuration: VideoConfiguration) -> URL? {
+        if let audioData = configuration.audioData {
+            let tempURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension("wav")
+            do {
+                try audioData.write(to: tempURL)
+                return tempURL
+            } catch {
+                return nil
+            }
+        }
+        return configuration.audioURL
     }
 }

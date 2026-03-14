@@ -364,9 +364,16 @@ public final class VideoProcessor: ObservableObject {
     /// Handle job queue events.
     private func handleJobEvent(_ event: JobEvent) {
         switch event {
-        case .jobCompleted(let job, let images):
+        case .jobCompleted(let job, let images, let audioData):
             if configuration.collectAllCompletedJobs || isVideoJob(job) {
                 addFrames(from: images, job: job)
+                if !audioData.isEmpty {
+                    if collectedFrames.audioData != nil {
+                        collectedFrames.audioData!.append(contentsOf: audioData)
+                    } else {
+                        collectedFrames.audioData = audioData
+                    }
+                }
             }
         default:
             break
@@ -385,12 +392,17 @@ public final class VideoProcessor: ObservableObject {
         guard !isAssembling else { return }
 
         // Get configuration from provider or use default
-        let videoConfig: VideoConfiguration
+        var videoConfig: VideoConfiguration
         if let provider = configuration.configurationProvider,
            let config = provider(jobId) {
             videoConfig = config
         } else {
             videoConfig = configuration.defaultVideoConfiguration
+        }
+
+        // Inject audio from collected frames into the video config
+        if let firstAudio = collectedFrames.audioData?.first {
+            videoConfig.audioData = firstAudio
         }
 
         do {
