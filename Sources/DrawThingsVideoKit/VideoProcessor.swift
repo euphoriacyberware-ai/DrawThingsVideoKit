@@ -362,11 +362,14 @@ public final class VideoProcessor: ObservableObject {
 
                 // 2. Store audio after frames are set
                 if !audioData.isEmpty {
+                    print("[VideoProcessor] Received \(audioData.count) audio track(s), total \(audioData.reduce(0) { $0 + $1.count }) bytes")
                     if collectedFrames.audioData != nil {
                         collectedFrames.audioData!.append(contentsOf: audioData)
                     } else {
                         collectedFrames.audioData = audioData
                     }
+                } else {
+                    print("[VideoProcessor] No audio data in completed job")
                 }
 
                 // 3. Trigger auto-assembly after both frames and audio are ready
@@ -409,6 +412,9 @@ public final class VideoProcessor: ObservableObject {
         // Inject audio from collected frames into the video config
         if let firstAudio = collectedFrames.audioData?.first {
             videoConfig.audioData = firstAudio
+            print("[VideoProcessor] Injecting audio into video: \(firstAudio.count) bytes")
+        } else {
+            print("[VideoProcessor] No audio available for video assembly (audioData: \(collectedFrames.audioData?.count ?? 0) tracks)")
         }
 
         do {
@@ -418,6 +424,7 @@ public final class VideoProcessor: ObservableObject {
                 clearFrames()
             }
         } catch {
+            print("[VideoProcessor] Assembly failed: \(error)")
             // Error is already published via events
         }
     }

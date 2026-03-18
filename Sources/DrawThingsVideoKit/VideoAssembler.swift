@@ -236,41 +236,8 @@ public actor VideoAssembler {
             }
         }
 
-        // Resolve audio source before setting up the writer
+        // Resolve audio source URL (writes audioData to temp WAV if needed)
         let audioSourceURL = resolveAudioSource(configuration: configuration)
-        var audioAssetReader: AVAssetReader? = nil
-        var audioReaderOutput: AVAssetReaderTrackOutput? = nil
-
-        // Pre-load audio asset if available (needed to add input before startWriting)
-        if let audioURL = audioSourceURL {
-            do {
-                let audioAsset = AVURLAsset(url: audioURL)
-                guard let audioTrack = try await audioAsset.loadTracks(withMediaType: .audio).first else {
-                    throw VideoAssemblerError.audioMuxingFailed(nil)
-                }
-
-                let readerOutputSettings: [String: Any] = [
-                    AVFormatIDKey: kAudioFormatLinearPCM,
-                    AVLinearPCMBitDepthKey: 16,
-                    AVLinearPCMIsFloatKey: false,
-                    AVLinearPCMIsBigEndianKey: false,
-                    AVLinearPCMIsNonInterleaved: false
-                ]
-
-                let reader = try AVAssetReader(asset: audioAsset)
-                let output = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: readerOutputSettings)
-                guard reader.canAdd(output) else {
-                    throw VideoAssemblerError.audioMuxingFailed(nil)
-                }
-                reader.add(output)
-                audioAssetReader = reader
-                audioReaderOutput = output
-            } catch let error as VideoAssemblerError {
-                throw error
-            } catch {
-                throw VideoAssemblerError.audioMuxingFailed(error)
-            }
-        }
 
         // Create asset writer
         let writer: AVAssetWriter
@@ -297,26 +264,6 @@ public actor VideoAssembler {
             throw VideoAssemblerError.failedToCreateWriterInput
         }
         writer.add(writerInput)
-
-        // Add audio writer input before starting (must be added before startWriting)
-        var audioWriterInput: AVAssetWriterInput? = nil
-        if audioAssetReader != nil {
-            let audioOutputSettings: [String: Any] = [
-                AVFormatIDKey: kAudioFormatMPEG4AAC,
-                AVSampleRateKey: 44100,
-                AVNumberOfChannelsKey: 2,
-                AVEncoderBitRateKey: 128000
-            ]
-
-            let audioInput = AVAssetWriterInput(mediaType: .audio, outputSettings: audioOutputSettings)
-            audioInput.expectsMediaDataInRealTime = false
-
-            guard writer.canAdd(audioInput) else {
-                throw VideoAssemblerError.audioMuxingFailed(nil)
-            }
-            writer.add(audioInput)
-            audioWriterInput = audioInput
-        }
 
         // Create pixel buffer adaptor
         let sourcePixelBufferAttributes: [String: Any] = [
@@ -345,8 +292,11 @@ public actor VideoAssembler {
         let frameDuration = CMTime(value: 1, timescale: CMTimeScale(effectiveFrameRate))
 
         for (index, frame) in frames.enumerated() {
-            // Wait for input to be ready
+            // Wait for input to be ready, checking for writer failure
             while !writerInput.isReadyForMoreMediaData {
+                if writer.status == .failed {
+                    throw VideoAssemblerError.failedToFinishWriting(writer.error ?? NSError(domain: "VideoAssembler", code: -1, userInfo: [NSLocalizedDescriptionKey: "Writer failed during frame writing at frame \(index)"]))
+                }
                 try await Task.sleep(nanoseconds: 10_000_000) // 10ms
             }
 
@@ -354,6 +304,7 @@ public actor VideoAssembler {
             let presentationTime = CMTimeMultiply(frameDuration, multiplier: Int32(index))
 
             guard adaptor.append(pixelBuffer, withPresentationTime: presentationTime) else {
+                let writerError = writer.error?.localizedDescription ?? "unknown"
                 throw VideoAssemblerError.failedToAppendFrame(index)
             }
 
@@ -361,34 +312,21 @@ public actor VideoAssembler {
         }
 
         writerInput.markAsFinished()
-
-        // Write audio samples after video frames
-        if let audioInput = audioWriterInput,
-           let reader = audioAssetReader,
-           let readerOutput = audioReaderOutput {
-            guard reader.startReading() else {
-                throw VideoAssemblerError.audioMuxingFailed(reader.error)
-            }
-
-            while let sampleBuffer = readerOutput.copyNextSampleBuffer() {
-                while !audioInput.isReadyForMoreMediaData {
-                    try await Task.sleep(nanoseconds: 10_000_000)
-                }
-                audioInput.append(sampleBuffer)
-            }
-
-            audioInput.markAsFinished()
-        }
-
         await writer.finishWriting()
-
-        // Clean up temp audio file if we created one from audioData
-        if configuration.audioData != nil, let tempURL = audioSourceURL {
-            try? FileManager.default.removeItem(at: tempURL)
-        }
 
         if let error = writer.error {
             throw VideoAssemblerError.failedToFinishWriting(error)
+        }
+
+        // Mux audio in a separate pass using AVMutableComposition
+        if let audioURL = audioSourceURL {
+            defer {
+                if configuration.audioData != nil {
+                    try? FileManager.default.removeItem(at: audioURL)
+                }
+            }
+
+            try await muxAudio(audioURL: audioURL, intoVideoAt: configuration.outputURL)
         }
 
         return configuration.outputURL
@@ -467,5 +405,76 @@ public actor VideoAssembler {
             }
         }
         return configuration.audioURL
+    }
+
+    /// Mux audio into an existing video file using AVMutableComposition.
+    /// Replaces the video file in-place with a version containing both tracks.
+    private func muxAudio(audioURL: URL, intoVideoAt videoURL: URL) async throws {
+        let videoAsset = AVURLAsset(url: videoURL)
+        let audioAsset = AVURLAsset(url: audioURL)
+
+        guard let videoTrack = try await videoAsset.loadTracks(withMediaType: .video).first else {
+            return // No video track to mux into
+        }
+        guard let audioTrack = try await audioAsset.loadTracks(withMediaType: .audio).first else {
+            return // No audio track available
+        }
+
+        let composition = AVMutableComposition()
+
+        // Add video track
+        let videoDuration = try await videoAsset.load(.duration)
+        guard let compositionVideoTrack = composition.addMutableTrack(
+            withMediaType: .video,
+            preferredTrackID: kCMPersistentTrackID_Invalid
+        ) else {
+            throw VideoAssemblerError.audioMuxingFailed(nil)
+        }
+        try compositionVideoTrack.insertTimeRange(
+            CMTimeRange(start: .zero, duration: videoDuration),
+            of: videoTrack,
+            at: .zero
+        )
+
+        // Add audio track, trimmed to video duration
+        guard let compositionAudioTrack = composition.addMutableTrack(
+            withMediaType: .audio,
+            preferredTrackID: kCMPersistentTrackID_Invalid
+        ) else {
+            throw VideoAssemblerError.audioMuxingFailed(nil)
+        }
+        let audioDuration = try await audioAsset.load(.duration)
+        let insertDuration = CMTimeMinimum(audioDuration, videoDuration)
+        try compositionAudioTrack.insertTimeRange(
+            CMTimeRange(start: .zero, duration: insertDuration),
+            of: audioTrack,
+            at: .zero
+        )
+
+        // Export to a temp file, then replace the original
+        let tempURL = videoURL.deletingLastPathComponent()
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("mp4")
+
+        guard let exportSession = AVAssetExportSession(
+            asset: composition,
+            presetName: AVAssetExportPresetPassthrough
+        ) else {
+            throw VideoAssemblerError.audioMuxingFailed(nil)
+        }
+
+        exportSession.outputURL = tempURL
+        exportSession.outputFileType = .mp4
+
+        await exportSession.export()
+
+        guard exportSession.status == .completed else {
+            throw VideoAssemblerError.audioMuxingFailed(exportSession.error)
+        }
+
+        // Replace original video with muxed version
+        let fm = FileManager.default
+        try fm.removeItem(at: videoURL)
+        try fm.moveItem(at: tempURL, to: videoURL)
     }
 }
