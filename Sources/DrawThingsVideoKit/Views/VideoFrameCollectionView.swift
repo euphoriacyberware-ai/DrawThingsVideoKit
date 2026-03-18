@@ -2,11 +2,16 @@
 //  VideoFrameCollectionView.swift
 //  DrawThingsVideoKit
 //
-//  SwiftUI view for displaying and managing collected video frames.
+//  Created by euphoriacyberware-ai.
+//  Copyright © 2025 euphoriacyberware-ai
+//
+//  Licensed under the MIT License.
+//  See LICENSE file in the project root for license information.
 //
 
 import SwiftUI
 import CoreGraphics
+import UniformTypeIdentifiers
 
 #if canImport(AppKit)
 import AppKit
@@ -41,22 +46,33 @@ public struct VideoFrameCollectionView: View {
     let frames: VideoFrameCollection
     var onRemove: ((IndexSet) -> Void)?
     var onReprocess: (() -> Void)?
+    var onSave: ((URL) async throws -> Void)?
+    var onLoad: ((URL) async throws -> VideoFrameCollection)?
     var thumbnailSize: CGFloat
     var isReprocessing: Bool
 
     @State private var selectedIndices: Set<Int> = []
+    @State private var showingSavePanel: Bool = false
+    @State private var showingLoadPanel: Bool = false
+    @State private var isSaving: Bool = false
+    @State private var isLoading: Bool = false
+    @State private var errorMessage: String?
 
     public init(
         frames: VideoFrameCollection,
         thumbnailSize: CGFloat = 80,
         onRemove: ((IndexSet) -> Void)? = nil,
         onReprocess: (() -> Void)? = nil,
+        onSave: ((URL) async throws -> Void)? = nil,
+        onLoad: ((URL) async throws -> VideoFrameCollection)? = nil,
         isReprocessing: Bool = false
     ) {
         self.frames = frames
         self.thumbnailSize = thumbnailSize
         self.onRemove = onRemove
         self.onReprocess = onReprocess
+        self.onSave = onSave
+        self.onLoad = onLoad
         self.isReprocessing = isReprocessing
     }
 
@@ -121,6 +137,172 @@ public struct VideoFrameCollectionView: View {
             } else {
                 frameGrid
             }
+
+            // Save/Load buttons
+            if onSave != nil || onLoad != nil {
+                saveLoadButtons
+            }
+
+            // Error message
+            if let errorMessage = errorMessage {
+                Text(errorMessage)
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
+        }
+        .fileImporter(
+            isPresented: $showingLoadPanel,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
+        ) { result in
+            handleLoadResult(result)
+        }
+        .fileExporter(
+            isPresented: $showingSavePanel,
+            document: FrameCollectionDocument(),
+            contentType: .folder,
+            defaultFilename: "VideoFrames"
+        ) { result in
+            handleSaveResult(result)
+        }
+    }
+
+    // MARK: - Save/Load Buttons
+
+    private var saveLoadButtons: some View {
+        HStack(spacing: 8) {
+            if let _ = onLoad {
+                Button {
+                    #if os(macOS)
+                    openLoadPanel()
+                    #else
+                    showingLoadPanel = true
+                    #endif
+                } label: {
+                    if isLoading {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Label("Load Frames", systemImage: "folder")
+                            .labelStyle(.titleAndIcon)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(isLoading || isSaving)
+                .help("Load frames from a saved collection")
+            }
+
+            if let _ = onSave, !frames.isEmpty {
+                Button {
+                    #if os(macOS)
+                    openSavePanel()
+                    #else
+                    showingSavePanel = true
+                    #endif
+                } label: {
+                    if isSaving {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Label("Save Frames", systemImage: "square.and.arrow.down")
+                            .labelStyle(.titleAndIcon)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(isLoading || isSaving)
+                .help("Save frames to disk for later use")
+            }
+
+            Spacer()
+        }
+    }
+
+    // MARK: - macOS Panel Helpers
+
+    #if os(macOS)
+    private func openLoadPanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "Select a folder containing saved video frames"
+        panel.prompt = "Load"
+
+        panel.begin { response in
+            if response == .OK, let url = panel.url {
+                handleLoadResult(.success([url]))
+            }
+        }
+    }
+
+    private func openSavePanel() {
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = "VideoFrames"
+        panel.message = "Choose where to save video frames"
+        panel.prompt = "Save"
+
+        panel.begin { response in
+            if response == .OK, let url = panel.url {
+                handleSaveResult(.success(url))
+            }
+        }
+    }
+    #endif
+
+    // MARK: - File Handling
+
+    private func handleSaveResult(_ result: Result<URL, Error>) {
+        switch result {
+        case .success(let url):
+            guard let onSave = onSave else { return }
+            isSaving = true
+            errorMessage = nil
+            Task {
+                do {
+                    try await onSave(url)
+                    await MainActor.run {
+                        isSaving = false
+                    }
+                } catch {
+                    await MainActor.run {
+                        isSaving = false
+                        errorMessage = "Save failed: \(error.localizedDescription)"
+                    }
+                }
+            }
+        case .failure(let error):
+            if (error as NSError).code != NSUserCancelledError {
+                errorMessage = "Save failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func handleLoadResult(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            guard let url = urls.first, let onLoad = onLoad else { return }
+            isLoading = true
+            errorMessage = nil
+            Task {
+                do {
+                    _ = try await onLoad(url)
+                    await MainActor.run {
+                        isLoading = false
+                    }
+                } catch {
+                    await MainActor.run {
+                        isLoading = false
+                        errorMessage = "Load failed: \(error.localizedDescription)"
+                    }
+                }
+            }
+        case .failure(let error):
+            if (error as NSError).code != NSUserCancelledError {
+                errorMessage = "Load failed: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -168,6 +350,25 @@ public struct VideoFrameCollectionView: View {
         } else {
             selectedIndices.insert(index)
         }
+    }
+}
+
+// MARK: - File Document for Export
+
+/// A placeholder document for the file exporter to create a folder.
+/// The actual saving is handled by the onSave callback.
+struct FrameCollectionDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.folder] }
+
+    init() {}
+
+    init(configuration: ReadConfiguration) throws {
+        // Not used for reading
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        // Return an empty directory wrapper - actual content is written by onSave
+        return FileWrapper(directoryWithFileWrappers: [:])
     }
 }
 

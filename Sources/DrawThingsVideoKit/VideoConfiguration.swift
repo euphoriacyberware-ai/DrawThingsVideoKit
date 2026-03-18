@@ -2,7 +2,11 @@
 //  VideoConfiguration.swift
 //  DrawThingsVideoKit
 //
-//  Configuration for video assembly and processing.
+//  Created by euphoriacyberware-ai.
+//  Copyright © 2025 euphoriacyberware-ai
+//
+//  Licensed under the MIT License.
+//  See LICENSE file in the project root for license information.
 //
 
 import Foundation
@@ -26,7 +30,7 @@ public struct VideoConfiguration: Sendable {
     public var outputURL: URL
 
     /// The source frame rate of the input frames.
-    /// Draw Things generates video at 16 fps (model limitation).
+    /// Varies by model: Wan 2.1 = 16 fps, Wan 2.2 TI2V = 24 fps, LTX = 25 fps.
     public var sourceFrameRate: Int
 
     /// The target frame rate for the output video.
@@ -61,6 +65,10 @@ public struct VideoConfiguration: Sendable {
     /// Optional audio track to include in the output.
     public var audioURL: URL?
 
+    /// Optional audio data (WAV) to mux into the output video.
+    /// Takes precedence over `audioURL` when both are set.
+    public var audioData: Data?
+
     /// Creates a new video configuration.
     ///
     /// - Parameters:
@@ -76,6 +84,7 @@ public struct VideoConfiguration: Sendable {
     ///   - superResolutionMethod: Preferred super resolution method (default: nil for auto).
     ///   - overwriteExisting: Whether to overwrite existing files (default: true).
     ///   - audioURL: Optional audio track URL.
+    ///   - audioData: Optional audio data (WAV) to mux into the output.
     public init(
         outputURL: URL,
         sourceFrameRate: Int = 16,
@@ -88,7 +97,8 @@ public struct VideoConfiguration: Sendable {
         superResolution: SuperResolutionMode = .disabled,
         superResolutionMethod: SuperResolutionMethod? = nil,
         overwriteExisting: Bool = true,
-        audioURL: URL? = nil
+        audioURL: URL? = nil,
+        audioData: Data? = nil
     ) {
         self.outputURL = outputURL
         self.sourceFrameRate = sourceFrameRate
@@ -102,6 +112,7 @@ public struct VideoConfiguration: Sendable {
         self.superResolutionMethod = superResolutionMethod
         self.overwriteExisting = overwriteExisting
         self.audioURL = audioURL
+        self.audioData = audioData
     }
 }
 

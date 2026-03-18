@@ -2,7 +2,11 @@
 //  VideoProcessor.swift
 //  DrawThingsVideoKit
 //
-//  Coordinator that subscribes to JobQueue events for automatic video assembly.
+//  Created by euphoriacyberware-ai.
+//  Copyright © 2025 euphoriacyberware-ai
+//
+//  Licensed under the MIT License.
+//  See LICENSE file in the project root for license information.
 //
 
 import Foundation
@@ -208,10 +212,8 @@ public final class VideoProcessor: ObservableObject {
         }
         metadata.prompt = job.prompt
         metadata.negativePrompt = job.negativePrompt
-        if let config = try? job.configuration() {
-            metadata.model = config.model
-            metadata.seed = config.seed
-        }
+        metadata.model = job.configuration.model
+        metadata.seed = job.configuration.seed
         metadata.generatedAt = job.completedAt ?? Date()
 
         // Add frames
@@ -221,13 +223,6 @@ public final class VideoProcessor: ObservableObject {
         collectedFrames.metadata = metadata
 
         events.send(.framesCollected(jobId: job.id, count: cgImages.count))
-
-        // Check for auto-assembly
-        if configuration.autoAssemble && collectedFrames.count >= configuration.minimumFrames {
-            Task {
-                await triggerAutoAssembly(forJobId: job.id)
-            }
-        }
     }
 
     /// Add frames from URLs.
@@ -256,6 +251,13 @@ public final class VideoProcessor: ObservableObject {
     /// - Parameter indices: The indices of frames to remove.
     public func removeFrames(at indices: IndexSet) {
         collectedFrames.remove(at: indices)
+    }
+
+    /// Replace all collected frames with a new collection.
+    ///
+    /// - Parameter collection: The new frame collection.
+    public func replaceFrames(with collection: VideoFrameCollection) {
+        collectedFrames = collection
     }
 
     // MARK: - Manual Assembly
@@ -353,9 +355,29 @@ public final class VideoProcessor: ObservableObject {
     /// Handle job queue events.
     private func handleJobEvent(_ event: JobEvent) {
         switch event {
-        case .jobCompleted(let job, let images):
+        case .jobCompleted(let job, let images, let audioData):
             if configuration.collectAllCompletedJobs || isVideoJob(job) {
+                // 1. Add frames (may clear previous job's data)
                 addFrames(from: images, job: job)
+
+                // 2. Store audio after frames are set
+                if !audioData.isEmpty {
+                    print("[VideoProcessor] Received \(audioData.count) audio track(s), total \(audioData.reduce(0) { $0 + $1.count }) bytes")
+                    if collectedFrames.audioData != nil {
+                        collectedFrames.audioData!.append(contentsOf: audioData)
+                    } else {
+                        collectedFrames.audioData = audioData
+                    }
+                } else {
+                    print("[VideoProcessor] No audio data in completed job")
+                }
+
+                // 3. Trigger auto-assembly after both frames and audio are ready
+                if configuration.autoAssemble && collectedFrames.count >= configuration.minimumFrames {
+                    Task {
+                        await triggerAutoAssembly(forJobId: job.id, model: job.configuration.model)
+                    }
+                }
             }
         default:
             break
@@ -365,21 +387,34 @@ public final class VideoProcessor: ObservableObject {
     /// Check if a job is marked as a video generation job.
     private func isVideoJob(_ job: GenerationJob) -> Bool {
         // Check configuration for video-related settings
-        guard let config = try? job.configuration() else { return false }
-        return config.numFrames > 1
+        return job.configuration.numFrames > 1
     }
 
     /// Trigger automatic assembly.
-    private func triggerAutoAssembly(forJobId jobId: UUID) async {
+    private func triggerAutoAssembly(forJobId jobId: UUID, model: String? = nil) async {
         guard !isAssembling else { return }
 
         // Get configuration from provider or use default
-        let videoConfig: VideoConfiguration
+        var videoConfig: VideoConfiguration
         if let provider = configuration.configurationProvider,
            let config = provider(jobId) {
             videoConfig = config
         } else {
             videoConfig = configuration.defaultVideoConfiguration
+        }
+
+        // Override source frame rate based on the model's native FPS
+        if let model = model {
+            let fps = sourceFrameRate(forModel: model)
+            videoConfig.sourceFrameRate = fps
+        }
+
+        // Inject audio from collected frames into the video config
+        if let firstAudio = collectedFrames.audioData?.first {
+            videoConfig.audioData = firstAudio
+            print("[VideoProcessor] Injecting audio into video: \(firstAudio.count) bytes")
+        } else {
+            print("[VideoProcessor] No audio available for video assembly (audioData: \(collectedFrames.audioData?.count ?? 0) tracks)")
         }
 
         do {
@@ -389,8 +424,27 @@ public final class VideoProcessor: ObservableObject {
                 clearFrames()
             }
         } catch {
+            print("[VideoProcessor] Assembly failed: \(error)")
             // Error is already published via events
         }
+    }
+
+    /// Derive the native source frame rate from the model filename.
+    private func sourceFrameRate(forModel model: String) -> Int {
+        let lowercased = model.lowercased()
+        if lowercased.contains("ltx") {
+            return 25
+        } else if lowercased.contains("hunyuan") {
+            return 24
+        } else if lowercased.contains("svd") {
+            return 25
+        } else if lowercased.contains("wan") {
+            if lowercased.contains("ti2v") || lowercased.contains("v2.2_5b") {
+                return 24
+            }
+            return 16
+        }
+        return 16 // Default for unknown models
     }
 }
 

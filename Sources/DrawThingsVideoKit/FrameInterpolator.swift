@@ -2,7 +2,11 @@
 //  FrameInterpolator.swift
 //  DrawThingsVideoKit
 //
-//  Frame interpolation using VTFrameProcessor (macOS 26+) with Core Image fallback.
+//  Created by euphoriacyberware-ai.
+//  Copyright © 2025 euphoriacyberware-ai
+//
+//  Licensed under the MIT License.
+//  See LICENSE file in the project root for license information.
 //
 
 import Foundation
