@@ -212,10 +212,8 @@ public final class VideoProcessor: ObservableObject {
         }
         metadata.prompt = job.prompt
         metadata.negativePrompt = job.negativePrompt
-        if let config = try? job.configuration() {
-            metadata.model = config.model
-            metadata.seed = config.seed
-        }
+        metadata.model = job.configuration.model
+        metadata.seed = job.configuration.seed
         metadata.generatedAt = job.completedAt ?? Date()
 
         // Add frames
@@ -383,8 +381,7 @@ public final class VideoProcessor: ObservableObject {
     /// Check if a job is marked as a video generation job.
     private func isVideoJob(_ job: GenerationJob) -> Bool {
         // Check configuration for video-related settings
-        guard let config = try? job.configuration() else { return false }
-        return config.numFrames > 1
+        return job.configuration.numFrames > 1
     }
 
     /// Trigger automatic assembly.
