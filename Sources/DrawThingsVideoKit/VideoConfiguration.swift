@@ -30,7 +30,7 @@ public struct VideoConfiguration: Sendable {
     public var outputURL: URL
 
     /// The source frame rate of the input frames.
-    /// Draw Things generates video at 16 fps (model limitation).
+    /// Varies by model: Wan 2.1 = 16 fps, Wan 2.2 TI2V = 24 fps, LTX = 25 fps.
     public var sourceFrameRate: Int
 
     /// The target frame rate for the output video.

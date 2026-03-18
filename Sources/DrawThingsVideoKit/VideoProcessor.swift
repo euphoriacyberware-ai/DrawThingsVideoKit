@@ -223,13 +223,6 @@ public final class VideoProcessor: ObservableObject {
         collectedFrames.metadata = metadata
 
         events.send(.framesCollected(jobId: job.id, count: cgImages.count))
-
-        // Check for auto-assembly
-        if configuration.autoAssemble && collectedFrames.count >= configuration.minimumFrames {
-            Task {
-                await triggerAutoAssembly(forJobId: job.id)
-            }
-        }
     }
 
     /// Add frames from URLs.
@@ -364,12 +357,22 @@ public final class VideoProcessor: ObservableObject {
         switch event {
         case .jobCompleted(let job, let images, let audioData):
             if configuration.collectAllCompletedJobs || isVideoJob(job) {
+                // 1. Add frames (may clear previous job's data)
                 addFrames(from: images, job: job)
+
+                // 2. Store audio after frames are set
                 if !audioData.isEmpty {
                     if collectedFrames.audioData != nil {
                         collectedFrames.audioData!.append(contentsOf: audioData)
                     } else {
                         collectedFrames.audioData = audioData
+                    }
+                }
+
+                // 3. Trigger auto-assembly after both frames and audio are ready
+                if configuration.autoAssemble && collectedFrames.count >= configuration.minimumFrames {
+                    Task {
+                        await triggerAutoAssembly(forJobId: job.id, model: job.configuration.model)
                     }
                 }
             }
@@ -385,7 +388,7 @@ public final class VideoProcessor: ObservableObject {
     }
 
     /// Trigger automatic assembly.
-    private func triggerAutoAssembly(forJobId jobId: UUID) async {
+    private func triggerAutoAssembly(forJobId jobId: UUID, model: String? = nil) async {
         guard !isAssembling else { return }
 
         // Get configuration from provider or use default
@@ -395,6 +398,12 @@ public final class VideoProcessor: ObservableObject {
             videoConfig = config
         } else {
             videoConfig = configuration.defaultVideoConfiguration
+        }
+
+        // Override source frame rate based on the model's native FPS
+        if let model = model {
+            let fps = sourceFrameRate(forModel: model)
+            videoConfig.sourceFrameRate = fps
         }
 
         // Inject audio from collected frames into the video config
@@ -411,6 +420,24 @@ public final class VideoProcessor: ObservableObject {
         } catch {
             // Error is already published via events
         }
+    }
+
+    /// Derive the native source frame rate from the model filename.
+    private func sourceFrameRate(forModel model: String) -> Int {
+        let lowercased = model.lowercased()
+        if lowercased.contains("ltx") {
+            return 25
+        } else if lowercased.contains("hunyuan") {
+            return 24
+        } else if lowercased.contains("svd") {
+            return 25
+        } else if lowercased.contains("wan") {
+            if lowercased.contains("ti2v") || lowercased.contains("v2.2_5b") {
+                return 24
+            }
+            return 16
+        }
+        return 16 // Default for unknown models
     }
 }
 
