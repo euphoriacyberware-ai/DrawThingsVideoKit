@@ -11,6 +11,7 @@
 
 import Foundation
 import Combine
+import DrawThingsClient
 import DrawThingsKit
 
 #if canImport(AppKit)
@@ -431,20 +432,7 @@ public final class VideoProcessor: ObservableObject {
 
     /// Derive the native source frame rate from the model filename.
     private func sourceFrameRate(forModel model: String) -> Int {
-        let lowercased = model.lowercased()
-        if lowercased.contains("ltx") {
-            return 25
-        } else if lowercased.contains("hunyuan") {
-            return 24
-        } else if lowercased.contains("svd") {
-            return 25
-        } else if lowercased.contains("wan") {
-            if lowercased.contains("ti2v") || lowercased.contains("v2.2_5b") {
-                return 24
-            }
-            return 16
-        }
-        return 16 // Default for unknown models
+        return LatentModelFamily.detect(from: model).nativeFrameRate ?? 16
     }
 }
 
