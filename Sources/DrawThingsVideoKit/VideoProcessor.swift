@@ -12,7 +12,7 @@
 import Foundation
 import Combine
 import DrawThingsClient
-import DrawThingsKit
+import DrawThingsQueue
 
 #if canImport(AppKit)
 import AppKit
@@ -170,7 +170,7 @@ public final class VideoProcessor: ObservableObject {
     /// Connect to a JobQueue to receive completion events.
     ///
     /// - Parameter queue: The JobQueue to subscribe to.
-    public func connect(to queue: JobQueue) {
+    public func connect(to queue: DrawThingsQueue) {
         // Disconnect any existing subscription
         disconnect()
 
@@ -196,26 +196,26 @@ public final class VideoProcessor: ObservableObject {
     /// - Parameters:
     ///   - images: The images from the completed job.
     ///   - job: The source job for metadata.
-    public func addFrames(from images: [PlatformImage], job: GenerationJob) {
+    public func addFrames(from images: [PlatformImage], result: GenerationResult) {
         let cgImages = images.compactMap { $0.cgImage }
         guard !cgImages.isEmpty else { return }
 
         // If this is a new job (different from the previous one), clear existing frames
         // This prevents frames from multiple video generations being mixed together
-        if let existingJobId = collectedFrames.metadata.sourceJobId, existingJobId != job.id {
+        if let existingJobId = collectedFrames.metadata.sourceJobId, existingJobId != result.request.id {
             clearFrames()
         }
 
-        // Create metadata from job
+        // Create metadata from result
         var metadata = collectedFrames.metadata
         if metadata.sourceJobId == nil {
-            metadata.sourceJobId = job.id
+            metadata.sourceJobId = result.request.id
         }
-        metadata.prompt = job.prompt
-        metadata.negativePrompt = job.negativePrompt
-        metadata.model = job.configuration.model
-        metadata.seed = job.configuration.seed
-        metadata.generatedAt = job.completedAt ?? Date()
+        metadata.prompt = result.request.prompt
+        metadata.negativePrompt = result.request.negativePrompt
+        metadata.model = result.request.configuration.model
+        metadata.seed = result.request.configuration.seed
+        metadata.generatedAt = result.completedAt
 
         // Add frames
         for cgImage in cgImages {
@@ -223,7 +223,7 @@ public final class VideoProcessor: ObservableObject {
         }
         collectedFrames.metadata = metadata
 
-        events.send(.framesCollected(jobId: job.id, count: cgImages.count))
+        events.send(.framesCollected(jobId: result.request.id, count: cgImages.count))
     }
 
     /// Add frames from URLs.
@@ -356,18 +356,18 @@ public final class VideoProcessor: ObservableObject {
     /// Handle job queue events.
     private func handleJobEvent(_ event: JobEvent) {
         switch event {
-        case .jobCompleted(let job, let images, let audioData):
-            if configuration.collectAllCompletedJobs || isVideoJob(job) {
+        case .requestCompleted(let result):
+            if configuration.collectAllCompletedJobs || isVideoResult(result) {
                 // 1. Add frames (may clear previous job's data)
-                addFrames(from: images, job: job)
+                addFrames(from: result.images, result: result)
 
                 // 2. Store audio after frames are set
-                if !audioData.isEmpty {
-                    print("[VideoProcessor] Received \(audioData.count) audio track(s), total \(audioData.reduce(0) { $0 + $1.count }) bytes")
+                if !result.audioData.isEmpty {
+                    print("[VideoProcessor] Received \(result.audioData.count) audio track(s), total \(result.audioData.reduce(0) { $0 + $1.count }) bytes")
                     if collectedFrames.audioData != nil {
-                        collectedFrames.audioData!.append(contentsOf: audioData)
+                        collectedFrames.audioData!.append(contentsOf: result.audioData)
                     } else {
-                        collectedFrames.audioData = audioData
+                        collectedFrames.audioData = result.audioData
                     }
                 } else {
                     print("[VideoProcessor] No audio data in completed job")
@@ -376,7 +376,7 @@ public final class VideoProcessor: ObservableObject {
                 // 3. Trigger auto-assembly after both frames and audio are ready
                 if configuration.autoAssemble && collectedFrames.count >= configuration.minimumFrames {
                     Task {
-                        await triggerAutoAssembly(forJobId: job.id, model: job.configuration.model)
+                        await triggerAutoAssembly(forJobId: result.request.id, model: result.request.configuration.model)
                     }
                 }
             }
@@ -385,10 +385,9 @@ public final class VideoProcessor: ObservableObject {
         }
     }
 
-    /// Check if a job is marked as a video generation job.
-    private func isVideoJob(_ job: GenerationJob) -> Bool {
-        // Check configuration for video-related settings
-        return job.configuration.numFrames > 1
+    /// Check if a result is from a video generation job.
+    private func isVideoResult(_ result: GenerationResult) -> Bool {
+        return result.request.configuration.numFrames > 1
     }
 
     /// Trigger automatic assembly.
