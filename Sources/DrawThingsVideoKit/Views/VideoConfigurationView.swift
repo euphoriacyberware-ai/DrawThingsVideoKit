@@ -60,6 +60,10 @@ public struct VideoConfigurationView: View {
     /// When nil, shows all common options.
     var frameDimensions: CGSize?
 
+    /// Source frame rate of the input video (e.g., 16 for Wan, 25 for LTX).
+    /// Used to compute correct interpolation target presets.
+    var sourceFrameRate: Int = 16
+
     /// Model download state.
     @State private var modelStatus: SuperResolutionModelStatus = .notApplicable
     @State private var isDownloading: Bool = false
@@ -73,15 +77,11 @@ public struct VideoConfigurationView: View {
     private let interpolationFactors = [2, 3, 4]
 
     /// Target frame rate presets for interpolation.
-    /// Based on source 16fps from Draw Things video generation.
+    /// Computed dynamically based on the source frame rate.
     ///
     /// Duration behavior:
-    /// - Presets marked "same duration" use factor = fps/16, maintaining original timing
-    /// - Presets marked with duration change will alter playback speed
-    ///
-    /// For example, 81 frames at 16 fps = 5.06 seconds:
-    /// - At 24 fps with 2x interpolation (161 frames): 161/24 = 6.7 sec (33% slower)
-    /// - At 32 fps with 2x interpolation (161 frames): 161/32 = 5.0 sec (same duration)
+    /// - Presets marked "same duration" use factor = fps/source, maintaining original timing
+    /// - Standard presets (24, 30 fps) may change duration if they don't divide evenly
     private struct TargetFrameRate: Identifiable, Hashable {
         let fps: Int
         let label: String
@@ -89,15 +89,26 @@ public struct VideoConfigurationView: View {
 
         var id: Int { fps }
 
-        static let presets: [TargetFrameRate] = [
-            // Standard frame rates (will change duration)
-            TargetFrameRate(fps: 24, label: "24 fps - Cinematic", factor: 2),
-            TargetFrameRate(fps: 30, label: "30 fps - Broadcast", factor: 2),
-            // Duration-preserving frame rates
-            TargetFrameRate(fps: 32, label: "32 fps - Smooth (same duration)", factor: 2),
-            TargetFrameRate(fps: 48, label: "48 fps - High Frame Rate (same duration)", factor: 3),
-            TargetFrameRate(fps: 64, label: "64 fps - Ultra Smooth (same duration)", factor: 4),
-        ]
+        /// Builds presets dynamically from the source frame rate.
+        static func presets(forSourceFPS source: Int) -> [TargetFrameRate] {
+            var results: [TargetFrameRate] = []
+
+            // Duration-preserving frame rates (exact multiples of source)
+            let x2 = source * 2
+            let x3 = source * 3
+            let x4 = source * 4
+
+            results.append(TargetFrameRate(fps: x2, label: "\(x2) fps - Smooth (2x, same duration)", factor: 2))
+            results.append(TargetFrameRate(fps: x3, label: "\(x3) fps - High Frame Rate (3x, same duration)", factor: 3))
+            results.append(TargetFrameRate(fps: x4, label: "\(x4) fps - Ultra Smooth (4x, same duration)", factor: 4))
+
+            return results
+        }
+    }
+
+    /// Computed presets based on source frame rate
+    private var targetFrameRatePresets: [TargetFrameRate] {
+        TargetFrameRate.presets(forSourceFPS: sourceFrameRate)
     }
 
     /// Whether VTFrameProcessor is available on this system.
@@ -189,7 +200,8 @@ public struct VideoConfigurationView: View {
         superResolutionEnabled: Binding<Bool>,
         superResolutionFactor: Binding<Int>,
         superResolutionMethod: Binding<SuperResolutionMethod?>,
-        frameDimensions: CGSize? = nil
+        frameDimensions: CGSize? = nil,
+        sourceFrameRate: Int = 16
     ) {
         self._frameRate = frameRate
         self._codec = codec
@@ -202,6 +214,7 @@ public struct VideoConfigurationView: View {
         self._superResolutionFactor = superResolutionFactor
         self._superResolutionMethod = superResolutionMethod
         self.frameDimensions = frameDimensions
+        self.sourceFrameRate = sourceFrameRate
     }
 
     public var body: some View {
@@ -235,10 +248,10 @@ public struct VideoConfigurationView: View {
                 .onChange(of: interpolationEnabled) { _, enabled in
                     if enabled {
                         // Default to 24fps cinematic when enabling
-                        if !TargetFrameRate.presets.contains(where: { $0.fps == frameRate }) {
+                        if !targetFrameRatePresets.contains(where: { $0.fps == frameRate }) {
                             frameRate = 24
                         }
-                        if let preset = TargetFrameRate.presets.first(where: { $0.fps == frameRate }) {
+                        if let preset = targetFrameRatePresets.first(where: { $0.fps == frameRate }) {
                             interpolationFactor = preset.factor
                         }
                     }
@@ -246,14 +259,14 @@ public struct VideoConfigurationView: View {
 
             if interpolationEnabled {
                 Picker("Target Frame Rate", selection: $frameRate) {
-                    ForEach(TargetFrameRate.presets) { preset in
+                    ForEach(targetFrameRatePresets) { preset in
                         Text(preset.label).tag(preset.fps)
                     }
                 }
-                .help("Output video frame rate (source is 16 fps)")
+                .help("Output video frame rate (source is \(sourceFrameRate) fps)")
                 .onChange(of: frameRate) { _, newFps in
                     // Update interpolation factor based on selected frame rate
-                    if let preset = TargetFrameRate.presets.first(where: { $0.fps == newFps }) {
+                    if let preset = targetFrameRatePresets.first(where: { $0.fps == newFps }) {
                         interpolationFactor = preset.factor
                     }
                 }
