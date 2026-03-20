@@ -16,15 +16,20 @@ let package = Package(
         ),
     ],
     dependencies: [
-	// Use remote URL for release
-	//.package(url: "https://github.com/euphoriacyberware-ai/DrawThingsKit", branch: "development"),
-        // Use local path for development; change to remote URL for release
-        .package(path: "../DrawThingsKit"),
+        // Use remote URLs for release
+        .package(url: "https://github.com/euphoriacyberware-ai/DrawThingsQueue", branch: "main"),
+        .package(url: "https://github.com/euphoriacyberware-ai/DT-gRPC-Swift-Client", branch: "main"),
+        // Use local paths for development; change to remote URLs for release
+        //.package(path: "../DrawThingsQueue"),
+        //.package(path: "../DT-gRPC-Swift-Client"),
     ],
     targets: [
         .target(
             name: "DrawThingsVideoKit",
-            dependencies: ["DrawThingsKit"]
+            dependencies: [
+                .product(name: "DrawThingsQueue", package: "DrawThingsQueue"),
+                .product(name: "DrawThingsClient", package: "DT-gRPC-Swift-Client"),
+            ]
         ),
     ]
 )
