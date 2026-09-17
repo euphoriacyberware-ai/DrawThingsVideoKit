@@ -1,12 +1,31 @@
 # DrawThingsVideoKit
 
-A Swift package that extends [DrawThingsKit](https://github.com/euphoriacyberware-ai/DrawThingsKit) with video assembly capabilities, allowing you to create videos from generated image sequences.
+A Swift package that extends [DrawThingsQueue](https://github.com/euphoriacyberware-ai/DrawThingsQueue) with video assembly, turning generated frame sequences into finished video files.
+
+## Overview
+
+DrawThingsVideoKit takes the frames a Draw Things video model produces and encodes them into a video with AVFoundation, optionally raising the frame rate with ML frame interpolation and the resolution with ML super resolution (with Core Image fallbacks on older systems). It can subscribe directly to a `DrawThingsQueue` and assemble a video automatically whenever a video job completes, or you can collect and assemble frames manually. Using it in an app means video generation, encoding, interpolation and upscaling are one pipeline with a few SwiftUI views on top, instead of separate AVFoundation and VideoToolbox code you have to write yourself.
+
+> ⚠️ **Caution:** This library is capable of generating very large batch jobs which can result in your account being throttled by the Draw Things cloud service if used with "bridge mode". It is recommended you only run large batches with local generation.
+
+## Features
+
+- **Frame-to-video assembly**: H.264, HEVC, ProRes 422 and ProRes 4444 output with selectable quality presets
+- **Frame interpolation**: ML-based motion-aware interpolation (VTFrameProcessor) with a Core Image cross-dissolve fallback; 2×, 3× and 4× factors
+- **Multi-pass mode**: Cascaded 2× → 2× interpolation for 4× output to reduce artifacts in fast-motion scenes
+- **Super resolution**: ML upscaling (VTSuperResolutionScaler) with a Lanczos fallback; 2×, 3× and 4× factors, including model download management
+- **Automatic assembly**: `VideoProcessor` subscribes to `DrawThingsQueue` events and assembles a video when a video job completes
+- **Manual mode and reprocessing**: Collect frames yourself, remove unwanted ones, and re-encode the same frames with different settings
+- **Flexible frame input**: `VideoFrameCollection` accepts URLs, `CGImage`s or `NSImage`/`UIImage`
+- **SwiftUI views**: Video settings editor, assembly progress, and a frame collection thumbnail grid
+- **Cross-platform**: macOS and iOS
 
 ## Requirements
 
 - macOS 14.0+ / iOS 17.0+
 - Swift 5.9+
 - Xcode 15.0+
+- A running [Draw Things](https://drawthings.ai) gRPC server (for generating the frames)
 
 ### Optional ML Features
 
@@ -14,6 +33,15 @@ A Swift package that extends [DrawThingsKit](https://github.com/euphoriacyberwar
 - **ML Super Resolution**: macOS 26+ / iOS 26+ (VTSuperResolutionScaler)
 
 Fallback implementations using Core Image are available on older systems.
+
+## Dependencies
+
+**DrawThings family:**
+
+- [DrawThingsQueue](https://github.com/euphoriacyberware-ai/DrawThingsQueue) — the generation queue `VideoProcessor` subscribes to
+- [DrawThingsClient](https://github.com/euphoriacyberware-ai/DT-gRPC-Swift-Client) (DT-gRPC-Swift-Client) — image types and conversion
+
+DrawThingsVideoKit does not depend on [DrawThingsKit](https://github.com/euphoriacyberware-ai/DrawThingsKit). If your app uses DrawThingsKit's `JobQueue`, pass its underlying queue: `processor.connect(to: jobQueue.queue)`.
 
 ## Installation
 
@@ -23,7 +51,7 @@ Add DrawThingsVideoKit to your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/euphoriacyberware-ai/DrawThingsVideoKit", from: "1.0.0")
+    .package(url: "https://github.com/euphoriacyberware-ai/DrawThingsVideoKit", branch: "main")
 ]
 ```
 
@@ -105,11 +133,11 @@ let outputURL = try await assembler.assemble(
 
 ### VideoProcessor
 
-High-level coordinator that integrates with DrawThingsKit's JobQueue. Supports two modes of operation:
+High-level coordinator that subscribes to a `DrawThingsQueue`. Supports two modes of operation:
 
 #### Automatic Mode (Recommended)
 
-Subscribes to JobQueue events and automatically assembles videos when video jobs complete:
+Subscribes to `DrawThingsQueue` events and automatically assembles videos when video jobs complete:
 
 ```swift
 // Create a configuration provider for dynamic per-job output URLs
@@ -155,7 +183,7 @@ processor.events
     }
     .store(in: &cancellables)
 
-// Connect to job queue - processor will automatically handle video jobs
+// Connect to the queue - processor will automatically handle video jobs
 processor.connect(to: queue)
 ```
 
@@ -456,7 +484,7 @@ This workflow is ideal for:
 
 ```swift
 import SwiftUI
-import DrawThingsKit
+import DrawThingsQueue
 import DrawThingsVideoKit
 import Combine
 
@@ -528,7 +556,7 @@ class VideoSettings: ObservableObject {
         )
     }
 
-    func connect(to queue: JobQueue) {
+    func connect(to queue: DrawThingsQueue) {
         guard videoModeEnabled else { return }
         videoProcessor.connect(to: queue)
     }
@@ -578,8 +606,17 @@ class VideoSettings: ObservableObject {
 }
 
 struct ContentView: View {
-    @StateObject private var queue = JobQueue()
+    @StateObject private var queue: DrawThingsQueue
     @StateObject private var videoSettings = VideoSettings()
+
+    init() {
+        do {
+            let queue = try DrawThingsQueue(address: "localhost:7859")
+            _queue = StateObject(wrappedValue: queue)
+        } catch {
+            fatalError("Failed to create queue: \(error)")
+        }
+    }
 
     var body: some View {
         VStack {
@@ -647,3 +684,7 @@ For macOS apps using App Sandbox, you'll need the following entitlements to save
 ## License
 
 MIT License - see LICENSE file for details.
+
+## Disclaimer
+
+The "Draw Things" name is used in this project only because Draw Things is the application these libraries are designed to work with. The author is not affiliated with, endorsed by, or associated with the developers of Draw Things. The code in this library was independently derived and is not based on Draw Things source code.
