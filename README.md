@@ -18,6 +18,7 @@ DrawThingsVideoKit takes the frames a Draw Things video model produces and encod
 - **Manual mode and reprocessing**: Collect frames yourself, remove unwanted ones, and re-encode the same frames with different settings
 - **Flexible frame input**: `VideoFrameCollection` accepts URLs, `CGImage`s or `NSImage`/`UIImage`
 - **SwiftUI views**: Video settings editor, assembly progress, and a frame collection thumbnail grid
+- **Diagnostics**: Logs through the shared `DTLogger` (`.video` category); off by default (see [Logging](#logging))
 - **Cross-platform**: macOS and iOS
 
 ## Requirements
@@ -680,6 +681,29 @@ For macOS apps using App Sandbox, you'll need the following entitlements to save
 </dict>
 </plist>
 ```
+
+## Logging
+
+DrawThingsVideoKit logs through `DTLogger` from DrawThingsClient, in the `.video` category:
+- `.debug`: audio collection and injection
+- `.warning`: VideoToolbox super resolution falling back to Core Image
+- `.error`: assembly failures
+
+Logging is off by default; enable it in your app:
+
+```swift
+import DrawThingsClient
+
+DTLogger.minimumLevel = .debug
+```
+
+View the output in Xcode's console, in Console.app (subsystem `com.drawthings`), or in Terminal:
+
+```bash
+log stream --predicate 'subsystem == "com.drawthings" AND category == "Video"' --level debug
+```
+
+Drop the `category` clause to include queue and gRPC messages as well. See [Logging & Debugging](https://github.com/euphoriacyberware-ai/DT-gRPC-Swift-Client#logging--debugging) in the DrawThingsClient README for levels, categories and other settings.
 
 ## License
 
