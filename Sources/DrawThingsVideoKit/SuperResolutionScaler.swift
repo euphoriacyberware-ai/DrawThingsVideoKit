@@ -14,6 +14,7 @@ import CoreImage
 import CoreVideo
 import CoreMedia
 import VideoToolbox
+import DrawThingsClient
 
 /// Errors that can occur during super resolution scaling.
 public enum SuperResolutionError: Error, LocalizedError {
@@ -322,7 +323,7 @@ public actor SuperResolutionScaler {
                     )
                 } catch {
                     // Log the error and fall back to Core Image
-                    print("[SuperResolution] VT super resolution failed: \(error.localizedDescription). Falling back to Core Image.")
+                    DTLogger.warning("VT super resolution failed: \(error.localizedDescription). Falling back to Core Image.", category: .video)
                     return try upscaleWithCoreImage(
                         frames: frames,
                         scaleFactor: scaleFactor,
@@ -351,7 +352,7 @@ public actor SuperResolutionScaler {
                     )
                 } catch {
                     // Log the error and fall back to Core Image
-                    print("[SuperResolution] VT low latency failed: \(error.localizedDescription). Falling back to Core Image.")
+                    DTLogger.warning("VT low latency failed: \(error.localizedDescription). Falling back to Core Image.", category: .video)
                     return try upscaleWithCoreImage(
                         frames: frames,
                         scaleFactor: scaleFactor,

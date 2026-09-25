@@ -363,14 +363,14 @@ public final class VideoProcessor: ObservableObject {
 
                 // 2. Store audio after frames are set
                 if !result.audioData.isEmpty {
-                    print("[VideoProcessor] Received \(result.audioData.count) audio track(s), total \(result.audioData.reduce(0) { $0 + $1.count }) bytes")
+                    DTLogger.debug("Received \(result.audioData.count) audio track(s), total \(result.audioData.reduce(0) { $0 + $1.count }) bytes", category: .video)
                     if collectedFrames.audioData != nil {
                         collectedFrames.audioData!.append(contentsOf: result.audioData)
                     } else {
                         collectedFrames.audioData = result.audioData
                     }
                 } else {
-                    print("[VideoProcessor] No audio data in completed job")
+                    DTLogger.debug("No audio data in completed job", category: .video)
                 }
 
                 // 3. Trigger auto-assembly after both frames and audio are ready
@@ -412,9 +412,9 @@ public final class VideoProcessor: ObservableObject {
         // Inject audio from collected frames into the video config
         if let firstAudio = collectedFrames.audioData?.first {
             videoConfig.audioData = firstAudio
-            print("[VideoProcessor] Injecting audio into video: \(firstAudio.count) bytes")
+            DTLogger.debug("Injecting audio into video: \(firstAudio.count) bytes", category: .video)
         } else {
-            print("[VideoProcessor] No audio available for video assembly (audioData: \(collectedFrames.audioData?.count ?? 0) tracks)")
+            DTLogger.debug("No audio available for video assembly (audioData: \(collectedFrames.audioData?.count ?? 0) tracks)", category: .video)
         }
 
         do {
@@ -424,7 +424,7 @@ public final class VideoProcessor: ObservableObject {
                 clearFrames()
             }
         } catch {
-            print("[VideoProcessor] Assembly failed: \(error)")
+            DTLogger.error("Assembly failed: \(error)", category: .video)
             // Error is already published via events
         }
     }
