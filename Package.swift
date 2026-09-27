@@ -17,8 +17,8 @@ let package = Package(
     ],
     dependencies: [
         // Use remote URLs for release
-        .package(url: "https://github.com/euphoriacyberware-ai/DrawThingsQueue", branch: "main"),
-        .package(url: "https://github.com/euphoriacyberware-ai/DT-gRPC-Swift-Client", branch: "main"),
+        .package(url: "https://github.com/euphoriacyberware-ai/DrawThingsQueue", .upToNextMajor(from: "0.1.1")),
+        .package(url: "https://github.com/euphoriacyberware-ai/DT-gRPC-Swift-Client", .upToNextMajor(from: "1.7.2")),
         // Use local paths for development; change to remote URLs for release
         //.package(path: "../DrawThingsQueue"),
         //.package(path: "../DT-gRPC-Swift-Client"),
