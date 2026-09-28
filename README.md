@@ -1,5 +1,15 @@
 # DrawThingsVideoKit
 
+> [!IMPORTANT]
+> **DrawThingsVideoKit has moved into [DrawThings-Swift](https://github.com/euphoriacyberware-ai/DrawThings-Swift).** Since DrawThings-Swift 2.0.0 it is the
+> `DrawThingsVideoKit` product of that package: `VideoProcessor` is `@Observable`, takes results from any
+> source (including `GenerationQueue`), and no longer depends on DrawThingsQueue. The SwiftUI views are now in
+> the [example app](https://github.com/euphoriacyberware-ai/DrawThings-Swift/tree/main/Examples/DrawThingsExample). New development happens there.
+>
+> This repository stays at **0.3.1**, which works with DrawThingsClient 1.x. Pin it with
+> `.upToNextMajor(from: "0.3.1")` until you move to 2.0; see the
+> [migration guide](https://github.com/euphoriacyberware-ai/DrawThings-Swift/blob/main/MIGRATING-2.0.md#drawthingsvideokit-0x).
+
 A Swift package that extends [DrawThingsQueue](https://github.com/euphoriacyberware-ai/DrawThingsQueue) with video assembly, turning generated frame sequences into finished video files.
 
 ## Overview
